@@ -1,0 +1,16 @@
+# Dependencies and build outputs
+frontend/node_modules/
+frontend/dist/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+
+# Keep private biometric datasets and trained model weights out of source control
+/data/**
+/model-artifacts/**
+backend/uploads/
