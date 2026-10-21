@@ -6,7 +6,7 @@ import type { PersonInput } from "../data/PeopleContext";
 type Props = {
   person?: Person;
   onClose: () => void;
-  onSave: (person: PersonInput) => void;
+  onSave: (person: PersonInput) => void | Promise<void>;
   existingIds: string[];
 };
 
@@ -15,6 +15,8 @@ export default function PersonEditorDialog({ person, onClose, onSave, existingId
   const [id, setId] = useState(person?.id ?? "");
   const [department, setDepartment] = useState(person?.department ?? "");
   const [role, setRole] = useState(person?.role ?? "");
+  const [email, setEmail] = useState(person?.email ?? "");
+  const [phone, setPhone] = useState(person?.phone ?? "");
   const [registrationStatus, setRegistrationStatus] = useState<Person["registrationStatus"]>(person?.registrationStatus ?? "Active");
   const [attendanceStatus] = useState<Person["status"]>(person?.status ?? "Absent");
   const [avatar, setAvatar] = useState(person?.avatar ?? "");
@@ -47,7 +49,7 @@ export default function PersonEditorDialog({ person, onClose, onSave, existingId
     reader.readAsDataURL(file);
   }
 
-  function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const normalizedId = id.trim().toUpperCase();
     if (!person && existingIds.includes(normalizedId)) {
@@ -55,12 +57,17 @@ export default function PersonEditorDialog({ person, onClose, onSave, existingId
       return;
     }
     const trimmedName = name.trim();
-    if (!trimmedName || !normalizedId || !department.trim() || !role.trim()) {
+    if (!trimmedName || !normalizedId || !department.trim() || !role.trim() || !email.trim() || !phone.trim()) {
       setFormError("Complete all required fields.");
       return;
     }
     const initials = trimmedName.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
-    onSave({ name: trimmedName, id: normalizedId, department: department.trim(), role: role.trim(), registrationStatus, status: attendanceStatus, avatar, initials });
+    setFormError("");
+    try {
+      await onSave({ name: trimmedName, id: normalizedId, department: department.trim(), role: role.trim(), email: email.trim(), phone: phone.trim(), registrationStatus, status: attendanceStatus, avatar, initials });
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "Could not save this person.");
+    }
   }
 
   return (
@@ -70,13 +77,15 @@ export default function PersonEditorDialog({ person, onClose, onSave, existingId
         <form onSubmit={submit}>
           <div className="photo-upload-row">
             <span className="avatar avatar-lg">{avatar ? <img src={avatar} alt="Selected profile" /> : <UserRound size={24} />}</span>
-            <div><strong>Profile photo <span>(optional)</span></strong><small>Image preview only. This will not be used for identity matching.</small><label className="button button-secondary upload-photo"><Camera size={14} /> Choose image<input type="file" accept="image/*" onChange={handlePhoto} /></label>{photoError && <small className="form-error">{photoError}</small>}</div>
+            <div><strong>Profile photo <span>(optional)</span></strong><small>Preview only; uploads are not saved to the facility API or used for identity matching.</small><label className="button button-secondary upload-photo"><Camera size={14} /> Choose image<input type="file" accept="image/*" onChange={handlePhoto} /></label>{photoError && <small className="form-error">{photoError}</small>}</div>
           </div>
           <div className="editor-form-grid">
             <label className="form-row">Full name<input autoFocus value={name} onChange={(event) => setName(event.target.value)} required maxLength={100} placeholder="Full name" /></label>
             <label className="form-row">Employee / student ID<input value={id} onChange={(event) => setId(event.target.value)} required maxLength={32} placeholder="e.g. VR-2057" disabled={Boolean(person)} /></label>
             <label className="form-row">Department / unit<input value={department} onChange={(event) => setDepartment(event.target.value)} required maxLength={80} placeholder="Department" /></label>
             <label className="form-row">Role<input value={role} onChange={(event) => setRole(event.target.value)} required maxLength={80} placeholder="Role or position" /></label>
+            <label className="form-row">Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required maxLength={320} placeholder="name@example.com" /></label>
+            <label className="form-row">Phone<input type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} required maxLength={64} placeholder="Phone number" /></label>
             <label className="form-row editor-status">Registration status<select value={registrationStatus} onChange={(event) => setRegistrationStatus(event.target.value as Person["registrationStatus"])}><option>Active</option><option>Inactive</option></select></label>
           </div>
           {formError && <p className="form-error" role="alert">{formError}</p>}

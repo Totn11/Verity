@@ -1,7 +1,7 @@
 export type AttendanceStatus = "Present" | "Absent" | "On leave";
 export type RegistrationStatus = "Active" | "Inactive";
 export type AttendanceAction = "Check-in" | "Check-out";
-export type LocationSource = "authorized-terminal" | "access-reader" | "approved-sensor" | "mock-terminal";
+export type LocationSource = "authorized-terminal" | "access-reader" | "approved-sensor" | "mock-terminal" | "manual-attendance" | "imported-attendance";
 export type LocationState = "confirmed" | "stale" | "unknown";
 
 export interface Person {
@@ -15,6 +15,7 @@ export interface Person {
   avatar: string;
   initials: string;
   email: string;
+  phone?: string;
   badge: string;
   registrationStatus: RegistrationStatus;
   locationTimestamp: string;

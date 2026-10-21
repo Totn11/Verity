@@ -12,3 +12,5 @@ services:
         value: 3.11.11
       - key: VERITY_SIAMESE_MATCH_THRESHOLD
         value: "0.5"
+      - key: DATABASE_URL
+        sync: false

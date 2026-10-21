@@ -7,6 +7,7 @@ import { usePeople } from "../data/PeopleContext";
 import type { AttendanceAction, AttendanceRecord, Person } from "../data/models";
 import { runMockRecognition, type MockRecognitionResult } from "../services/mockRecognitionService";
 import { getRecognitionApiStatus, type RecognitionApiStatus } from "../services/recognitionApiService";
+import { useFacilityQueries, useAttendanceMutation } from "../data/useFacilityQueries";
 
 type CameraStatus = "stopped" | "starting" | "streaming" | "permission-denied" | "unavailable" | "error";
 type RecognitionState = "idle" | "processing" | "matched" | "no-match" | "error";
@@ -27,7 +28,11 @@ function mostRecentAction(records: AttendanceRecord[], personId: string): Attend
 }
 
 export default function RecognitionTerminal() {
-  const { people, attendanceRecords, terminalEvents, recordRecognitionEvent, recordTerminalEvent } = usePeople();
+  const { terminalEvents, recordRecognitionEvent } = usePeople();
+  const facility = useFacilityQueries();
+  const people = facility.people.data ?? [];
+  const attendanceRecords = facility.attendance.data ?? [];
+  const attendanceMutation = useAttendanceMutation();
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>("stopped");
   const [recognitionState, setRecognitionState] = useState<RecognitionState>("idle");
   const [selectedPersonId, setSelectedPersonId] = useState("");
@@ -45,6 +50,20 @@ export default function RecognitionTerminal() {
   const mountedRef = useRef(false);
 
   const activePeople = useMemo(() => people.filter((person) => person.registrationStatus === "Active"), [people]);
+  const recentEvents = facility.isApi
+    ? attendanceRecords.slice(0, 6).map((record) => ({
+      id: record.id,
+      personId: record.personId,
+      personName: record.personName,
+      initials: record.initials,
+      avatar: record.avatar,
+      action: record.action,
+      timestamp: record.timestamp,
+      location: record.room,
+      source: record.source,
+      terminal: "API",
+    }))
+    : terminalEvents.slice(0, 6);
   const identifiedPerson = recognitionResult?.status === "match" ? recognitionResult.person : null;
   const latestAction = identifiedPerson ? mostRecentAction(attendanceRecords, identifiedPerson.id) : null;
   const nextAction: AttendanceAction | null = identifiedPerson ? latestAction === "Check-in" ? "Check-out" : latestAction === "Check-out" ? "Check-in" : identifiedPerson.status === "Present" ? "Check-out" : "Check-in" : null;
@@ -177,23 +196,23 @@ export default function RecognitionTerminal() {
     }
   }
 
-  function recordAttendance() {
+  async function recordAttendance() {
     if (!identifiedPerson || !nextAction || duplicateAction) return;
     const timestamp = new Date().toISOString();
-    const recorded = recordTerminalEvent({
-      id: `${terminalId}-${identifiedPerson.id}-${Date.now()}`,
-      personId: identifiedPerson.id,
-      personName: identifiedPerson.name,
-      initials: identifiedPerson.initials,
-      avatar: identifiedPerson.avatar,
-      action: nextAction,
-      timestamp,
-      terminal: terminalId,
-      location: terminalLocation,
-      source: "mock-terminal",
-    });
-    if (!recorded) {
-      setRecordError("A duplicate attendance event was blocked. Wait before recording another event for this person.");
+    const room = facility.rooms.data?.find((entry) =>
+      entry.name.toLowerCase().includes("east entrance")
+      || entry.id === "east-entrance",
+    );
+    try {
+      await attendanceMutation.mutateAsync({
+        action: nextAction,
+        personId: identifiedPerson.id,
+        roomId: room?.id,
+        timestamp,
+        idempotencyKey: `${terminalId}-${identifiedPerson.id}-${Date.now()}`,
+      });
+    } catch (error) {
+      setRecordError(error instanceof Error ? error.message : "Attendance could not be recorded.");
       return;
     }
     setAttendanceResult({ action: nextAction, timestamp, person: identifiedPerson });
@@ -278,10 +297,10 @@ export default function RecognitionTerminal() {
           </div>
           {message && <div className={`terminal-inline-message ${recognitionState === "matched" ? "message-info" : ""}`} role="status"><Info size={14} />{message}</div>}
           {recordError && <div className="terminal-inline-message message-error" role="alert"><CircleAlert size={14} />{recordError}</div>}
-          {attendanceResult && <div className="terminal-attendance-success" role="status"><Check size={17} /><div><strong>{attendanceResult.action} recorded in demo</strong><span>{attendanceResult.person.name} · {formatTimestamp(attendanceResult.timestamp)} · {terminalLocation}</span></div></div>}
+          {attendanceResult && <div className="terminal-attendance-success" role="status"><Check size={17} /><div><strong>{attendanceResult.action} recorded {facility.isApi ? "by the API" : "in demo"}</strong><span>{attendanceResult.person.name} · {formatTimestamp(attendanceResult.timestamp)} · {terminalLocation}</span></div></div>}
           <div className="terminal-attendance-action">
             {identifiedPerson && nextAction
-              ? <button className="button button-primary" disabled={!cameraIsActive || recognitionState !== "matched" || duplicateAction} onClick={recordAttendance}>{nextAction === "Check-in" ? <ArrowDownToLine size={16} /> : <ArrowUpFromLine size={16} />}{duplicateAction ? `${nextAction} already recorded` : `Record demo ${nextAction.toLowerCase()}`}</button>
+              ? <button className="button button-primary" disabled={!cameraIsActive || recognitionState !== "matched" || duplicateAction || attendanceMutation.isPending} onClick={() => void recordAttendance()}>{nextAction === "Check-in" ? <ArrowDownToLine size={16} /> : <ArrowUpFromLine size={16} />}{attendanceMutation.isPending ? "Recording…" : duplicateAction ? `${nextAction} already recorded` : `Record ${facility.isApi ? "" : "demo "}${nextAction.toLowerCase()}`}</button>
               : <button className="button button-primary" disabled><Fingerprint size={16} /> Attendance action unavailable</button>}
             <button className="button button-secondary" onClick={resetTerminal} disabled={recognitionState === "processing"}><RotateCcw size={15} /> Reset</button>
           </div>
@@ -290,9 +309,9 @@ export default function RecognitionTerminal() {
       </div>
 
       <section className="panel terminal-events-panel">
-        <div className="terminal-panel-heading"><div><h2>Recent attendance events</h2><p>Current browser session only · not persisted</p></div><span className="demo-tag">DEMO EVENTS</span></div>
-        {terminalEvents.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>PERSON</th><th>EVENT</th><th>TIMESTAMP</th><th>TERMINAL LOCATION</th><th>SOURCE</th><th>RECORD</th></tr></thead><tbody>{terminalEvents.slice(0, 6).map((event) => <tr key={event.id}><td><span className="person-cell"><Avatar person={{ name: event.personName, initials: event.initials, avatar: event.avatar }} size="sm" /><span><strong>{event.personName}</strong><small>{event.personId}</small></span></span></td><td><StatusBadge tone={event.action === "Check-in" ? "green" : "blue"}>{event.action}</StatusBadge></td><td><span className="table-time"><Clock3 size={13} />{formatTimestamp(event.timestamp)}</span></td><td><span className="table-time"><MapPin size={13} />{event.location}</span></td><td>Mock terminal · {event.terminal}</td><td><StatusBadge tone="gray">Demo only</StatusBadge></td></tr>)}</tbody></table></div>
-          : <div className="terminal-history-empty"><Clock3 size={17} /><span>No demo attendance events in this browser session yet.</span></div>}
+        <div className="terminal-panel-heading"><div><h2>Recent attendance events</h2><p>{facility.isApi ? "Persisted facility API events" : "Current browser session only · not persisted"}</p></div><span className="demo-tag">{facility.isApi ? "API DATA" : "DEMO EVENTS"}</span></div>
+        {recentEvents.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>PERSON</th><th>EVENT</th><th>TIMESTAMP</th><th>TERMINAL LOCATION</th><th>SOURCE</th><th>RECORD</th></tr></thead><tbody>{recentEvents.map((event) => <tr key={event.id}><td><span className="person-cell"><Avatar person={{ name: event.personName, initials: event.initials, avatar: event.avatar }} size="sm" /><span><strong>{event.personName}</strong><small>{event.personId}</small></span></span></td><td><StatusBadge tone={event.action === "Check-in" ? "green" : "blue"}>{event.action}</StatusBadge></td><td><span className="table-time"><Clock3 size={13} />{formatTimestamp(event.timestamp)}</span></td><td><span className="table-time"><MapPin size={13} />{event.location}</span></td><td>{facility.isApi ? event.source : `Mock terminal · ${event.terminal}`}</td><td><StatusBadge tone="gray">{facility.isApi ? "Recorded" : "Demo only"}</StatusBadge></td></tr>)}</tbody></table></div>
+          : <div className="terminal-history-empty"><Clock3 size={17} /><span>No attendance events are available in this {facility.isApi ? "API" : "demo"} session.</span></div>}
       </section>
       <div className="terminal-footer-note"><ShieldCheck size={14} /> No facial images or biometric templates are stored in browser storage. The camera stream is stopped when this page is closed.</div>
     </>

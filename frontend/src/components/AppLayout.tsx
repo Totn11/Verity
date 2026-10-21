@@ -6,6 +6,7 @@ import {
   Fingerprint, LayoutDashboard, LogOut, Menu, Search, Settings, Users, X,
   ScrollText, UserCog, ScanFace,
 } from "lucide-react";
+import { useAuth } from "../data/AuthContext";
 import { usePeople } from "../data/PeopleContext";
 
 const navGroups: { label: string; links: { to: string; label: string; icon: LucideIcon; badge?: string; end?: boolean }[] }[] = [
@@ -38,6 +39,9 @@ export default function AppLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const { role, setRole } = usePeople();
+  const { user, signOut } = useAuth();
+  const [signOutError, setSignOutError] = useState<string | null>(null);
+  const accountInitials = user?.email.split("@")[0].slice(0, 2).toUpperCase() ?? "AC";
   const pageTitles: Record<string, string> = {
     "/": "Dashboard",
     "/attendance": "Attendance",
@@ -56,6 +60,16 @@ export default function AppLayout() {
     event.preventDefault();
     navigate(search.trim() ? `/people?search=${encodeURIComponent(search.trim())}` : "/people");
     setSearch("");
+  }
+
+  async function handleSignOut() {
+    setSignOutError(null);
+    try {
+      await signOut();
+      navigate("/login", { replace: true });
+    } catch (error) {
+      setSignOutError(error instanceof Error ? error.message : "Unable to sign out.");
+    }
   }
 
   return (
@@ -93,12 +107,13 @@ export default function AppLayout() {
             <span>Visit the help center for setup guides.</span>
             <a href="mailto:support@verity.example">Get support <span aria-hidden="true">↗</span></a>
           </div>
-          <label className="demo-role-control sidebar-demo-role">Prototype role<select aria-label="Switch prototype role" value={role} onChange={(event) => setRole(event.target.value === "staff" ? "staff" : "administrator")}><option value="administrator">Administrator</option><option value="staff">Staff</option></select><small>UI preview only—not access control.</small></label>
-          <Link className="profile-menu" to="/login" title="Sign out and return to login">
-            <span className="admin-avatar">{role === "administrator" ? "SC" : "FS"}</span>
-            <span className="profile-copy"><strong>{role === "administrator" ? "Sarah Chen" : "Facility staff"}</strong><small>{role === "administrator" ? "Administrator · demo" : "Staff · demo view"}</small></span>
+          <label className="demo-role-control sidebar-demo-role">Prototype role<select aria-label="Switch prototype role" value={role} onChange={(event) => setRole(event.target.value === "staff" ? "staff" : "administrator")}><option value="administrator">Administrator</option><option value="staff">Staff</option></select><small>Preview only — not a security boundary.</small></label>
+          <button className="profile-menu" onClick={() => void handleSignOut()} title="Sign out and return to login">
+            <span className="admin-avatar">{accountInitials}</span>
+            <span className="profile-copy"><strong>{user?.email ?? "Signed-in account"}</strong><small>Signed in · demo data</small></span>
             <LogOut size={15} />
-          </Link>
+          </button>
+          {signOutError && <p role="alert" className="sign-out-error">{signOutError}</p>}
         </div>
       </aside>
 
@@ -115,8 +130,8 @@ export default function AppLayout() {
             <span className="topbar-divider" />
             <span className="topbar-date">{new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" }).format(new Date())}</span>
             <div className="topbar-popover-wrap profile-trigger-wrap">
-              <button className="topbar-profile" aria-label="Demo account menu" aria-expanded={profileOpen} onClick={() => setProfileOpen(!profileOpen)}><span className="admin-avatar">{role === "administrator" ? "SC" : "FS"}</span><ChevronDown size={13} /></button>
-              {profileOpen && <div className="topbar-popover profile-popover"><strong>{role === "administrator" ? "Sarah Chen" : "Facility staff"}</strong><small>{role === "administrator" ? "Facility administrator" : "Ordinary staff view"}</small><label className="demo-role-control">Prototype role<select aria-label="Switch prototype role" value={role} onChange={(event) => setRole(event.target.value === "staff" ? "staff" : "administrator")}><option value="administrator">Administrator</option><option value="staff">Staff</option></select></label><p className="demo-role-note">View-only UI simulation. This is not authentication or production access control.</p>{role === "administrator" && <Link to="/settings" onClick={() => setProfileOpen(false)}><Settings size={14} /> Account settings</Link>}<Link to="/login" onClick={() => setProfileOpen(false)}><LogOut size={14} /> Sign out</Link></div>}
+              <button className="topbar-profile" aria-label="Account menu" aria-expanded={profileOpen} onClick={() => setProfileOpen(!profileOpen)}><span className="admin-avatar">{accountInitials}</span><ChevronDown size={13} /></button>
+              {profileOpen && <div className="topbar-popover profile-popover"><strong>{user?.email ?? "Signed-in account"}</strong><small>Authenticated account</small><label className="demo-role-control">Prototype role<select aria-label="Switch prototype role" value={role} onChange={(event) => setRole(event.target.value === "staff" ? "staff" : "administrator")}><option value="administrator">Administrator</option><option value="staff">Staff</option></select><small>Preview only — not a security boundary.</small></label>{role === "administrator" && <Link to="/settings" onClick={() => setProfileOpen(false)}><Settings size={14} /> Account settings</Link>}{signOutError && <p role="alert" className="sign-out-error">{signOutError}</p>}<button type="button" onClick={() => void handleSignOut()}><LogOut size={14} /> Sign out</button></div>}
             </div>
           </div>
         </header>

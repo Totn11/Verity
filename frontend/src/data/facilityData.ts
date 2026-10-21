@@ -114,9 +114,9 @@ export function getRoomPeople(room: FacilityRoom, now = Date.now(), registeredPe
     if (!existing || new Date(locationEvent.timestamp).getTime() > new Date(existing.timestamp).getTime()) lastEventByPerson.set(locationEvent.personId, locationEvent);
   });
   return Array.from(lastEventByPerson.values()).flatMap((locationEvent) => {
-    if (locationEvent.roomId !== room.id) return [];
+    if (locationEvent.roomId !== room.id || locationEvent.eventType === "check-out") return [];
     const person = registeredPeople.find((entry) => entry.id === locationEvent.personId);
-    if (!person) return [];
+    if (!person || person.status !== "Present") return [];
     const ageMs = now - new Date(locationEvent.timestamp).getTime();
     const isValidTime = Number.isFinite(ageMs) && ageMs >= 0;
     return [{
@@ -137,5 +137,7 @@ export function getSourceLabel(source: LocationSource) {
   if (source === "mock-terminal") return "Simulated authorized terminal";
   if (source === "authorized-terminal") return "Authorized recognition terminal";
   if (source === "access-reader") return "Access-control reader";
+  if (source === "manual-attendance") return "Manual attendance entry";
+  if (source === "imported-attendance") return "Imported attendance record";
   return "Approved location source";
 }

@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { useMemo, useState, type FormEvent } from "react";
+import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 import { Activity, ArrowLeft, ArrowRight, Building2, CalendarDays, Check, ChevronDown, CircleAlert, Download, Filter, Fingerprint, KeyRound, LayoutGrid, List, MapPin, MoreHorizontal, Pencil, Search, Settings2, ShieldCheck, UserPlus, Users, UserRoundX } from "lucide-react";
 import Avatar from "../components/Avatar";
 import DataTable from "../components/DataTable";
@@ -8,9 +8,12 @@ import RecognitionTerminal from "../components/RecognitionTerminal";
 import PageHeader from "../components/PageHeader";
 import PersonEditorDialog from "../components/PersonEditorDialog";
 import StatusBadge from "../components/StatusBadge";
-import { facilityRooms } from "../data/facilityData";
+import QueryState from "../components/QueryState";
+import { useAuth } from "../data/AuthContext";
 import type { Person } from "../data/mockData";
 import { usePeople, type PersonInput } from "../data/PeopleContext";
+import { useAttendanceSummary, useFacilityQueries, usePersonMutations } from "../data/useFacilityQueries";
+import type { PersonWrite } from "../data/facilityProvider";
 
 function formatLocationTime(value: string) {
   if (!value) return "No recent confirmation";
@@ -18,20 +21,52 @@ function formatLocationTime(value: string) {
   if (Number.isNaN(timestamp.getTime())) return "Time unavailable";
   return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }).format(timestamp);
 }
+
+function toPersonWrite(person: PersonInput): PersonWrite {
+  return {
+    external_ref: person.id,
+    full_name: person.name,
+    email: person.email,
+    phone: person.phone,
+    department: person.department,
+    title: person.role,
+    status: person.registrationStatus === "Inactive" ? "inactive" : "active",
+    photo_url: person.avatar.startsWith("data:") ? null : person.avatar || null,
+  };
+}
+
 export function LoginPage() {
-  const [submitted, setSubmitted] = useState(false);
+  const { status, initialError, signIn } = useAuth();
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  if (status === "authenticated") return <Navigate to="/" replace />;
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null);
+    setSubmitting(true);
+    const formData = new FormData(event.currentTarget);
+    try {
+      await signIn(String(formData.get("email") ?? ""), String(formData.get("password") ?? ""));
+    } catch (signInError) {
+      setError(signInError instanceof Error ? signInError.message : "Unable to sign in.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <div className="login-screen">
       <div className="login-brand"><span className="brand-mark"><Fingerprint size={21} /></span><span className="brand-name">verity<span>.</span></span></div>
       <div className="login-card"><span className="login-kicker">WELCOME BACK</span><h1>Sign in to your workspace</h1><p>Manage attendance and facility operations securely.</p>
-        {submitted && <div className="inline-success"><Check size={16} /> Demo sign-in submitted. Authentication is not connected yet.</div>}
-        <form onSubmit={(event) => { event.preventDefault(); setSubmitted(true); }}>
-          <label>Email address<input type="email" placeholder="you@company.com" required /></label>
-          <label>Password<input type="password" placeholder="Enter your password" required /></label>
-          <div className="login-options"><label className="checkbox-label"><input type="checkbox" /> Remember me</label><a href="mailto:support@verity.example">Forgot password?</a></div>
-          <button className="button button-primary login-submit" type="submit">Sign in <ArrowRight size={16} /></button>
+        {(error || initialError) && <div className="login-error" role="alert"><CircleAlert size={16} /> {error ?? initialError}</div>}
+        <form onSubmit={handleSubmit}>
+          <label>Email address<input name="email" type="email" autoComplete="username" placeholder="you@company.com" required /></label>
+          <label>Password<input name="password" type="password" autoComplete="current-password" placeholder="Enter your password" required /></label>
+          <div className="login-options"><span>Use your facility account credentials.</span><a href="mailto:support@verity.example">Need help?</a></div>
+          <button className="button button-primary login-submit" type="submit" disabled={submitting || status === "checking"}>{submitting ? "Signing in…" : "Sign in"} <ArrowRight size={16} /></button>
         </form>
-        <div className="login-security"><ShieldCheck size={15} /> Protected with enterprise-grade security</div>
+        <div className="login-security"><ShieldCheck size={15} /> Signed, HttpOnly session</div>
       </div>
       <div className="login-foot">© 2026 Verity Systems <span>·</span> <a href="mailto:privacy@verity.example">Privacy</a></div>
     </div>
@@ -39,7 +74,11 @@ export function LoginPage() {
 }
 
 export function AttendancePage() {
-  const { people, attendanceRecords, recognitionEvents } = usePeople();
+  const { recognitionEvents } = usePeople();
+  const facility = useFacilityQueries();
+  const people = facility.people.data ?? [];
+  const attendanceRecords = facility.attendance.data ?? [];
+  const dateRecognitions = facility.isApi ? [] : recognitionEvents;
   const [query, setQuery] = useState("");
   const [date, setDate] = useState(() => {
     const today = new Date();
@@ -49,7 +88,7 @@ export function AttendancePage() {
   const [page, setPage] = useState(0);
   const pageSize = 8;
   const dateRecords = attendanceRecords.filter((record) => record.timestamp.slice(0, 10) === date);
-  const dateRecognitions = recognitionEvents.filter((event) => event.timestamp.slice(0, 10) === date);
+  const selectedDateRecognitions = dateRecognitions.filter((event) => event.timestamp.slice(0, 10) === date);
   const allEvents = [
     ...dateRecords.map((record) => ({
       id: record.id,
@@ -61,7 +100,7 @@ export function AttendancePage() {
       confidence: record.recordStatus === "sample" ? "Sample attendance" : "Recorded",
       state: "success" as const,
     })),
-    ...dateRecognitions.map((event) => ({
+    ...selectedDateRecognitions.map((event) => ({
       id: event.id,
       personId: event.personId,
       personName: event.personName,
@@ -84,13 +123,17 @@ export function AttendancePage() {
   const currentPage = Math.min(page, pageCount - 1);
   const pageEvents = visibleEvents.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
   const confirmedCount = dateRecords.filter((record) => record.action === "Check-in").length;
-  const reviewCount = dateRecognitions.filter((event) => event.outcome === "failed").length;
+  const reviewCount = selectedDateRecognitions.filter((event) => event.outcome === "failed").length;
   const latestEvent = allEvents[0];
+  if (facility.isPending) return <QueryState loading error={null} />;
+  if (facility.error) return <QueryState loading={false} error={facility.error} />;
+
   return (
     <>
-      <PageHeader eyebrow="ATTENDANCE" title="Live attendance" description="Monitor check-ins and recognition activity across your facility." action={<button className="button button-primary"><Download size={16} /> Export report</button>} />
-      <div className="demo-banner"><span className="demo-banner-icon"><Activity size={16} /></span><span><strong>Simulated activity</strong> — this demo does not connect to live cameras. Events below are illustrative only.</span><button aria-label="Dismiss notice">×</button></div>
-      <div className="compact-stats"><div><span>Confirmed check-ins</span><strong>{confirmedCount}</strong><small>From shared demo attendance data</small></div><div><span>Recognition attempts</span><strong>{dateRecognitions.length}</strong><small>Simulated results</small></div><div><span>Needs review</span><strong className="text-amber">{reviewCount}</strong><small>Unmatched attempts</small></div><div><span>Last event</span><strong className="small-stat">{latestEvent ? new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit", hour12: true }).format(new Date(latestEvent.timestamp)) : "—"}</strong><small>{latestEvent?.location ?? "No events for selected date"}</small></div></div>
+      <PageHeader eyebrow="ATTENDANCE" title={facility.isApi ? "Attendance records" : "Live attendance"} description={facility.isApi ? "Review persisted check-in and check-out events." : "Monitor simulated check-ins and recognition activity across your facility."} action={<button className="button button-primary"><Download size={16} /> Export report</button>} />
+      {!facility.isApi && <div className="demo-banner"><span className="demo-banner-icon"><Activity size={16} /></span><span><strong>Simulated activity</strong> — this demo does not connect to live cameras. Events below are illustrative only.</span><button aria-label="Dismiss notice">×</button></div>}
+      {facility.isApi && <div className="demo-banner"><span className="demo-banner-icon"><Activity size={16} /></span><span><strong>API attendance</strong> — recognition events are not provided by the API.</span></div>}
+      <div className="compact-stats"><div><span>Confirmed check-ins</span><strong>{confirmedCount}</strong><small>{facility.isApi ? "From facility API" : "From shared demo attendance data"}</small></div><div><span>Recognition attempts</span><strong>{selectedDateRecognitions.length}</strong><small>{facility.isApi ? "Not provided by API" : "Simulated results"}</small></div><div><span>Needs review</span><strong className="text-amber">{reviewCount}</strong><small>Unmatched attempts</small></div><div><span>Last event</span><strong className="small-stat">{latestEvent ? new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit", hour12: true }).format(new Date(latestEvent.timestamp)) : "—"}</strong><small>{latestEvent?.location ?? "No events for selected date"}</small></div></div>
       <div className="panel page-table-panel"><div className="toolbar"><div className="search-field table-search"><Search size={16} /><input aria-label="Search people or rooms" placeholder="Search people or rooms..." value={query} onChange={(event) => { setQuery(event.target.value); setPage(0); }} /></div><label className="button button-secondary"><CalendarDays size={15} /><input className="date-picker" aria-label="Filter attendance by date" type="date" value={date} onChange={(event) => { setDate(event.target.value); setPage(0); }} /></label><label className="button button-secondary"><Filter size={15} /><select className="native-select" aria-label="Filter attendance events" value={eventFilter} onChange={(event) => { setEventFilter(event.target.value); setPage(0); }}><option>All events</option><option>Check-ins</option><option>Check-outs</option><option>Unmatched</option></select></label></div>
         <div className="table-scroll"><table className="data-table"><thead><tr><th>PERSON</th><th>EVENT</th><th>TIME</th><th>LAST CONFIRMED LOCATION</th><th>RECORD</th><th>STATUS</th></tr></thead><tbody>{pageEvents.map((event) => {
           const person = event.personId ? people.find((entry) => entry.id === event.personId) : undefined;
@@ -100,7 +143,7 @@ export function AttendancePage() {
         })}</tbody></table>
           {pageEvents.length === 0 && <div className="directory-empty"><span><Search size={20} /></span><strong>No matching events</strong><p>Try a different search, date, or event filter.</p></div>}
         </div>
-        <div className="table-pagination"><span>Showing {visibleEvents.length ? `${currentPage * pageSize + 1}–${Math.min((currentPage + 1) * pageSize, visibleEvents.length)} of ${visibleEvents.length}` : "0"} events · Demo data</span><div><button disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button><button disabled={currentPage >= pageCount - 1} onClick={() => setPage(currentPage + 1)}>Next</button></div></div>
+        <div className="table-pagination"><span>Showing {visibleEvents.length ? `${currentPage * pageSize + 1}–${Math.min((currentPage + 1) * pageSize, visibleEvents.length)} of ${visibleEvents.length}` : "0"} events · {facility.isApi ? "API data" : "Demo data"}</span><div><button disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button><button disabled={currentPage >= pageCount - 1} onClick={() => setPage(currentPage + 1)}>Next</button></div></div>
       </div>
     </>
   );
@@ -137,7 +180,12 @@ export function DirectoryPage() {
   const [page, setPage] = useState(0);
   const [editing, setEditing] = useState<Person | null>(null);
   const [addOpen, setAddOpen] = useState(false);
-  const { people, addPerson, updatePerson, deactivatePerson, role: userRole } = usePeople();
+  const facility = useFacilityQueries();
+  const people = facility.people.data ?? [];
+  const { role: userRole } = usePeople();
+  const personMutations = usePersonMutations();
+  const mutationError = personMutations.create.error ?? personMutations.update.error;
+  const [operationError, setOperationError] = useState<string | null>(null);
   const canManageDirectory = userRole === "administrator";
   const pageSize = view === "table" ? 6 : 8;
   const departments = useMemo(() => Array.from(new Set(people.map((person) => person.department))).sort(), [people]);
@@ -161,20 +209,28 @@ export function DirectoryPage() {
     setPage(0);
   }
 
-  function savePerson(values: PersonInput) {
+  async function savePerson(values: PersonInput) {
+    const payload = toPersonWrite(values);
     if (editing) {
-      updatePerson(editing.id, values);
+      await personMutations.update.mutateAsync({ id: editing.id, changes: payload });
     } else {
-      addPerson(values);
+      await personMutations.create.mutateAsync(payload);
       clearFilters();
     }
     setEditing(null);
     setAddOpen(false);
   }
 
-  function handleDeactivate(person: Person) {
+  async function handleDeactivate(person: Person) {
     if (person.registrationStatus === "Inactive") return;
-    if (window.confirm(`Deactivate ${person.name}'s registration? The record will remain in the directory.`)) deactivatePerson(person.id);
+    if (window.confirm(`Deactivate ${person.name}'s registration? The record will remain in the directory.`)) {
+      setOperationError(null);
+      try {
+        await personMutations.update.mutateAsync({ id: person.id, changes: { status: "inactive" } });
+      } catch (error) {
+        setOperationError(error instanceof Error ? error.message : "Could not deactivate this person.");
+      }
+    }
   }
 
   function clearFilters() {
@@ -187,12 +243,16 @@ export function DirectoryPage() {
     setPage(0);
   }
 
+  if (facility.isPending) return <QueryState loading error={null} />;
+  if (facility.error) return <QueryState loading={false} error={facility.error} />;
+
   return (
     <>
       <PageHeader eyebrow="DIRECTORY" title="People directory" description="View authorized facility profiles, registration, and attendance information." action={canManageDirectory ? <button className="button button-primary" onClick={() => setAddOpen(true)}><UserPlus size={16} /> Register person</button> : undefined} />
-      <div className="directory-summary"><div><span className="summary-icon"><Users size={17} /></span><span><strong>{activeCount} active registrations</strong><small>{people.length} fictional demo profiles · {departments.length} departments</small></span></div><div className="summary-right"><span className="summary-present"><i /> {presentCount} present</span><span className="summary-absent"><i /> {activeCount - presentCount} not confirmed</span></div></div>
+      <div className="directory-summary"><div><span className="summary-icon"><Users size={17} /></span><span><strong>{activeCount} active registrations</strong><small>{people.length} {facility.isApi ? "people" : "fictional demo profiles"} · {departments.length} departments</small></span></div><div className="summary-right"><span className="summary-present"><i /> {presentCount} present</span><span className="summary-absent"><i /> {activeCount - presentCount} not confirmed</span></div></div>
       <div className="directory-privacy"><ShieldCheck size={15} /><span>Prototype role-based UI only—not access control. This directory uses fictional records; uploaded photos are not used to match arbitrary images.</span></div>
       <div className="panel directory-panel">
+        {(operationError || mutationError) && <div className="directory-empty" role="alert"><strong>Could not save directory changes</strong><p>{operationError ?? mutationError?.message}</p></div>}
         <div className="directory-toolbar">
           <label className="search-field directory-search"><Search size={16} /><input aria-label="Search people by name or ID" value={query} onChange={(event) => { setQuery(event.target.value); setPage(0); setSearchParams(event.target.value ? { search: event.target.value } : {}); }} placeholder="Search name or ID..." /></label>
           <select className="native-select" aria-label="Filter department" value={department} onChange={(event) => setFilter(setDepartment, event.target.value)}><option>All departments</option>{departments.map((value) => <option key={value}>{value}</option>)}</select>
@@ -223,7 +283,7 @@ export function DirectoryPage() {
             <div className="person-card-location"><MapPin size={14} /><span><strong>{person.room}</strong><small>{formatLocationTime(person.locationTimestamp)}</small></span></div>
           </article>)}</div> : <div className="directory-empty"><span><UserRoundX size={22} /></span><strong>No people found</strong><p>Try another name or ID, or adjust the department, role, and status filters.</p><button className="button button-secondary" onClick={clearFilters}>Clear filters</button></div>
         )}
-        <div className="table-pagination"><span>{filteredPeople.length ? `Showing ${currentPage * pageSize + 1}–${Math.min((currentPage + 1) * pageSize, filteredPeople.length)} of ${filteredPeople.length} profiles` : "No profiles"} · Demonstration records</span><div><button disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button><button disabled={currentPage >= pageCount - 1} onClick={() => setPage(currentPage + 1)}>Next</button></div></div>
+        <div className="table-pagination"><span>{filteredPeople.length ? `Showing ${currentPage * pageSize + 1}–${Math.min((currentPage + 1) * pageSize, filteredPeople.length)} of ${filteredPeople.length} profiles` : "No profiles"} · {facility.isApi ? "API data" : "Demonstration records"}</span><div><button disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button><button disabled={currentPage >= pageCount - 1} onClick={() => setPage(currentPage + 1)}>Next</button></div></div>
       </div>
       {canManageDirectory && addOpen && <PersonEditorDialog existingIds={people.map((person) => person.id)} onClose={() => setAddOpen(false)} onSave={savePerson} />}
       {canManageDirectory && editing && <PersonEditorDialog person={editing} existingIds={people.map((person) => person.id)} onClose={() => setEditing(null)} onSave={savePerson} />}
@@ -233,30 +293,39 @@ export function DirectoryPage() {
 
 export function PersonProfilePage() {
   const { personId } = useParams();
-  const { people, updatePerson, deactivatePerson, attendanceRecords, role: userRole } = usePeople();
+  const { role: userRole } = usePeople();
+  const facility = useFacilityQueries(personId);
+  const personMutations = usePersonMutations();
+  const people = facility.people.data ?? [];
+  const attendanceRecords = facility.attendance.data ?? [];
   const [editing, setEditing] = useState(false);
   const person = people.find((entry) => entry.id === personId);
+  if (facility.isPending) return <QueryState loading error={null} />;
+  if (facility.error) return <QueryState loading={false} error={facility.error} />;
   if (!person) return <div className="directory-empty panel"><span><UserRoundX size={22} /></span><strong>Person not found</strong><p>This record may have been removed from the current demo session.</p><Link className="button button-secondary" to="/people">Back to directory</Link></div>;
   const selectedPerson = person;
   const canManageDirectory = userRole === "administrator";
-  const personAttendance = attendanceRecords.filter((record) => record.personId === person.id).sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  const personAttendance = (facility.isApi ? attendanceRecords : attendanceRecords.filter((record) => record.personId === person.id)).sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   const attendanceDays = new Set(personAttendance.filter((record) => record.action === "Check-in").map((record) => record.timestamp.slice(0, 10))).size;
   const checkoutCount = personAttendance.filter((record) => record.action === "Check-out").length;
-  function savePerson(values: PersonInput) {
-    updatePerson(selectedPerson.id, values);
+  async function savePerson(values: PersonInput) {
+    await personMutations.update.mutateAsync({ id: selectedPerson.id, changes: toPersonWrite(values) });
     setEditing(false);
   }
-  function handleDeactivate() {
+  async function handleDeactivate() {
     if (selectedPerson.registrationStatus === "Inactive") return;
-    if (window.confirm(`Deactivate ${selectedPerson.name}'s registration? The record will remain in the directory.`)) deactivatePerson(selectedPerson.id);
+    if (window.confirm(`Deactivate ${selectedPerson.name}'s registration? The record will remain in the directory.`)) {
+      await personMutations.update.mutateAsync({ id: selectedPerson.id, changes: { status: "inactive" } });
+    }
   }
   return (
     <>
       <Link to="/people" className="back-link"><ArrowLeft size={15} /> Back to people</Link>
       <div className="profile-hero panel"><Avatar person={person} size="lg" /><div className="profile-hero-copy"><div className="profile-name-line"><h1>{person.name}</h1><StatusBadge tone={person.registrationStatus === "Active" ? "green" : "gray"}>{person.registrationStatus}</StatusBadge><StatusBadge tone={person.status === "Present" ? "green" : person.status === "Absent" ? "amber" : "gray"}>{person.status}</StatusBadge></div><p>{person.role} <span>·</span> {person.department} <span>·</span> {person.id}</p><div className="profile-contact">Last confirmed: {formatLocationTime(person.locationTimestamp)}</div></div>{canManageDirectory && <div className="profile-actions"><button className="button button-secondary" onClick={() => setEditing(true)}><Pencil size={15} /> Edit profile</button><button className="button button-secondary" disabled={person.registrationStatus === "Inactive"} onClick={handleDeactivate}><UserRoundX size={15} /> {person.registrationStatus === "Inactive" ? "Inactive" : "Deactivate"}</button></div>}</div>
-      <div className="profile-grid"><div className="panel profile-info"><div className="panel-heading"><div><h2>Last confirmed location</h2><p>Not a live location feed</p></div><span className="info-icon"><MapPin size={17} /></span></div><div className="last-location"><span className="location-pin"><MapPin size={17} /></span><div><strong>{person.room}</strong><small>{formatLocationTime(person.locationTimestamp)}</small></div></div><div className="location-note">Location is based on the most recent confirmed attendance event. This demo does not provide live location tracking.</div></div>
-        <div className="panel profile-info"><div className="panel-heading"><div><h2>Attendance in demo data</h2><p>Derived from recorded attendance events</p></div><span className="info-icon"><CalendarDays size={17} /></span></div><div className="month-metrics"><div><strong>{attendanceDays}</strong><span>Days checked in</span></div><div><strong>{checkoutCount}</strong><span>Check-outs</span></div><div><strong>{personAttendance.length}</strong><span>Total events</span></div></div></div></div>
-      <div className="panel page-table-panel profile-history"><div className="panel-heading"><div><h2>Attendance history</h2><p>Recorded events for {person.name}</p></div><span className="demo-tag">DEMO DATA</span></div><div className="table-scroll"><table className="data-table"><thead><tr><th>DATE & TIME</th><th>EVENT</th><th>LAST CONFIRMED ROOM</th><th>SOURCE</th><th>STATUS</th></tr></thead><tbody>{personAttendance.map((record) => <tr key={record.id}><td>{formatLocationTime(record.timestamp)}</td><td>{record.action}</td><td>{record.room}</td><td><span className="table-time"><Fingerprint size={14} /> {record.source === "mock-terminal" ? "Mock terminal" : "Sample event"}</span></td><td><StatusBadge tone={record.action === "Check-in" ? "green" : "amber"}>{record.recordStatus === "sample" ? "Sample" : "Recorded"}</StatusBadge></td></tr>)}</tbody></table>{personAttendance.length === 0 && <div className="directory-empty"><strong>No attendance history</strong><p>No attendance events are available for this person in this demo session.</p></div>}</div></div>
+      {(personMutations.update.error) && <div className="directory-empty" role="alert"><strong>Could not save person changes</strong><p>{personMutations.update.error.message}</p></div>}
+      <div className="profile-grid"><div className="panel profile-info"><div className="panel-heading"><div><h2>Last confirmed location</h2><p>Not a live location feed</p></div><span className="info-icon"><MapPin size={17} /></span></div><div className="last-location"><span className="location-pin"><MapPin size={17} /></span><div><strong>{person.room}</strong><small>{formatLocationTime(person.locationTimestamp)}</small></div></div><div className="location-note">Location is based on the most recent confirmed attendance event. {facility.isApi ? "The API does not provide live location tracking." : "This demo does not provide live location tracking."}</div></div>
+        <div className="panel profile-info"><div className="panel-heading"><div><h2>Attendance {facility.isApi ? "from API data" : "in demo data"}</h2><p>Derived from recorded attendance events</p></div><span className="info-icon"><CalendarDays size={17} /></span></div><div className="month-metrics"><div><strong>{attendanceDays}</strong><span>Days checked in</span></div><div><strong>{checkoutCount}</strong><span>Check-outs</span></div><div><strong>{personAttendance.length}</strong><span>Total events</span></div></div></div></div>
+      <div className="panel page-table-panel profile-history"><div className="panel-heading"><div><h2>Attendance history</h2><p>Recorded events for {person.name}</p></div><span className="demo-tag">{facility.isApi ? "API DATA" : "DEMO DATA"}</span></div><div className="table-scroll"><table className="data-table"><thead><tr><th>DATE & TIME</th><th>EVENT</th><th>LAST CONFIRMED ROOM</th><th>SOURCE</th><th>STATUS</th></tr></thead><tbody>{personAttendance.map((record) => <tr key={record.id}><td>{formatLocationTime(record.timestamp)}</td><td>{record.action}</td><td>{record.room}</td><td><span className="table-time"><Fingerprint size={14} /> {record.source === "mock-terminal" ? "Mock terminal" : facility.isApi ? "Recorded API event" : "Sample event"}</span></td><td><StatusBadge tone={record.action === "Check-in" ? "green" : "amber"}>{record.recordStatus === "sample" ? "Sample" : "Recorded"}</StatusBadge></td></tr>)}</tbody></table>{personAttendance.length === 0 && <div className="directory-empty"><strong>No attendance history</strong><p>No attendance events are available for this person in this {facility.isApi ? "API" : "demo"} session.</p></div>}</div></div>
       {canManageDirectory && editing && <PersonEditorDialog person={person} existingIds={people.map((entry) => entry.id)} onClose={() => setEditing(false)} onSave={savePerson} />}
     </>
   );
@@ -271,7 +340,11 @@ export function CheckInPage() {
 }
 
 export function ReportsPage() {
-  const { people, attendanceRecords, recognitionEvents } = usePeople();
+  const demo = usePeople();
+  const facility = useFacilityQueries();
+  const people = facility.people.data ?? [];
+  const attendanceRecords = facility.attendance.data ?? [];
+  const recognitionEvents = facility.isApi ? [] : demo.recognitionEvents;
   const [endDate, setEndDate] = useState(() => {
     const today = new Date();
     return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
@@ -283,6 +356,7 @@ export function ReportsPage() {
   const rangeStart = new Date(rangeEnd);
   rangeStart.setDate(rangeStart.getDate() - 6);
   const startKey = `${rangeStart.getFullYear()}-${String(rangeStart.getMonth() + 1).padStart(2, "0")}-${String(rangeStart.getDate()).padStart(2, "0")}`;
+  const attendanceSummary = useAttendanceSummary(startKey, endDate);
   const rangeRecords = attendanceRecords.filter((record) => {
     const person = people.find((entry) => entry.id === record.personId);
     return record.timestamp.slice(0, 10) >= startKey
@@ -292,14 +366,16 @@ export function ReportsPage() {
   const checkIns = rangeRecords.filter((record) => record.action === "Check-in");
   const averageAttendance = (checkIns.length / 7).toFixed(1);
   const presentCount = activePeople.filter((person) => person.status === "Present" && (department === "All departments" || person.department === department)).length;
-  const capacity = facilityRooms.reduce((total, room) => total + room.capacity, 0);
+  const capacity = (facility.rooms.data ?? []).reduce((total, room) => total + room.capacity, 0);
   const roomUtilization = Math.round((presentCount / capacity) * 100);
   const unmatchedCount = recognitionEvents.filter((event) => event.outcome === "failed" && event.timestamp.slice(0, 10) >= startKey && event.timestamp.slice(0, 10) <= endDate).length;
   const dailyCounts = Array.from({ length: 7 }, (_, index) => {
     const day = new Date(rangeStart);
     day.setDate(rangeStart.getDate() + index);
     const key = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
-    const count = checkIns.filter((record) => record.timestamp.slice(0, 10) === key).length;
+    const count = facility.isApi && department === "All departments"
+      ? (attendanceSummary.data ?? []).filter((entry) => entry.day.slice(0, 10) === key).reduce((total, entry) => total + entry.check_ins, 0)
+      : checkIns.filter((record) => record.timestamp.slice(0, 10) === key).length;
     return { key, label: new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(day), count };
   });
   const maxDailyCount = Math.max(1, ...dailyCounts.map((day) => day.count));
@@ -307,13 +383,17 @@ export function ReportsPage() {
     const count = activePeople.filter((person) => person.department === name && person.status === "Present").length;
     return { name, count, width: Math.round((count / Math.max(1, presentCount)) * 100) };
   }).filter((entry) => department === "All departments" || entry.name === department);
+  if (facility.isPending || (facility.isApi && attendanceSummary.isPending)) return <QueryState loading error={null} />;
+  if (facility.error) return <QueryState loading={false} error={facility.error} />;
+  if (facility.isApi && attendanceSummary.error) return <QueryState loading={false} error={attendanceSummary.error} />;
+
   return (
     <>
-      <PageHeader eyebrow="INSIGHTS" title="Reports & analytics" description="Understand attendance patterns and facility utilization." action={<button className="button button-primary"><Download size={16} /> Export report</button>} />
+      <PageHeader eyebrow="INSIGHTS" title="Reports & analytics" description={`Understand attendance patterns and facility utilization from ${facility.isApi ? "API records" : "demo data"}.`} action={<button className="button button-primary"><Download size={16} /> Export report</button>} />
       <div className="toolbar report-toolbar"><label className="button button-secondary"><CalendarDays size={15} /><span>7 days ending</span><input className="date-picker" aria-label="Report end date" type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></label><label className="button button-secondary"><Filter size={15} /><select className="native-select" aria-label="Filter report department" value={department} onChange={(event) => setDepartment(event.target.value)}><option>All departments</option>{departments.map((name) => <option key={name}>{name}</option>)}</select></label></div>
-      <div className="stats-grid report-stats"><div className="stat-card"><span className="stat-label">Average daily check-ins</span><div className="stat-value">{averageAttendance}</div><div className="stat-foot"><span>7-day sample</span></div></div><div className="stat-card"><span className="stat-label">Present records today</span><div className="stat-value">{presentCount}</div><div className="stat-foot"><span>From attendance status</span></div></div><div className="stat-card"><span className="stat-label">Recorded room utilization</span><div className="stat-value">{roomUtilization}%</div><div className="stat-foot"><span>Across configured room capacity</span></div></div><div className="stat-card"><span className="stat-label">Unmatched attempts</span><div className="stat-value">{unmatchedCount}</div><div className="stat-foot"><span>Simulated recognition events</span></div></div></div>
-      <div className="report-grid"><div className="panel report-chart-panel"><div className="panel-heading"><div><h2>Attendance by day</h2><p>Daily confirmed check-ins · shared demo records</p></div><span className="demo-tag">7 DAYS</span></div><div className="bar-chart">{dailyCounts.map((day) => <div className="bar-group" key={day.key} title={`${day.count} check-ins`}><span style={{ height: `${Math.max(8, (day.count / maxDailyCount) * 100)}%` }} /><small>{day.label}</small></div>)}</div></div><div className="panel departments-panel"><div className="panel-heading"><div><h2>By department</h2><p>Present demo profiles</p></div><MoreHorizontal size={18} /></div>{departmentRows.map(({ name, count, width }) => <div className="department-row" key={name}><div><span>{name}</span><strong>{count}</strong></div><div className="mini-progress"><span style={{ width: `${width}%` }} /></div></div>)}{departmentRows.length === 0 && <p className="report-footnote">No department records match this filter.</p>}</div></div>
-      <div className="report-footnote">All analytics on this page use demonstration data and are not operational records.</div>
+      <div className="stats-grid report-stats"><div className="stat-card"><span className="stat-label">Average daily check-ins</span><div className="stat-value">{averageAttendance}</div><div className="stat-foot"><span>{facility.isApi ? "7-day API data" : "7-day sample"}</span></div></div><div className="stat-card"><span className="stat-label">Present records today</span><div className="stat-value">{presentCount}</div><div className="stat-foot"><span>From attendance status</span></div></div><div className="stat-card"><span className="stat-label">Recorded room utilization</span><div className="stat-value">{roomUtilization}%</div><div className="stat-foot"><span>Across configured room capacity</span></div></div><div className="stat-card"><span className="stat-label">Unmatched attempts</span><div className="stat-value">{unmatchedCount}</div><div className="stat-foot"><span>{facility.isApi ? "Not provided by API" : "Simulated recognition events"}</span></div></div></div>
+      <div className="report-grid"><div className="panel report-chart-panel"><div className="panel-heading"><div><h2>Attendance by day</h2><p>Daily confirmed check-ins · {facility.isApi ? "API records" : "shared demo records"}</p></div><span className="demo-tag">7 DAYS</span></div>{dailyCounts.every((day) => day.count === 0) ? <p className="report-footnote">No check-ins are available for this date range.</p> : <div className="bar-chart">{dailyCounts.map((day) => <div className="bar-group" key={day.key} title={`${day.count} check-ins`}><span style={{ height: `${Math.max(8, (day.count / maxDailyCount) * 100)}%` }} /><small>{day.label}</small></div>)}</div>}</div><div className="panel departments-panel"><div className="panel-heading"><div><h2>By department</h2><p>Present {facility.isApi ? "API profiles" : "demo profiles"}</p></div><MoreHorizontal size={18} /></div>{departmentRows.map(({ name, count, width }) => <div className="department-row" key={name}><div><span>{name}</span><strong>{count}</strong></div><div className="mini-progress"><span style={{ width: `${width}%` }} /></div></div>)}{departmentRows.length === 0 && <p className="report-footnote">No department records match this filter.</p>}</div></div>
+      <div className="report-footnote">{facility.isApi ? "Recognition attempts are not included because the facility API does not provide recognition-event records." : "All analytics on this page use demonstration data and are not operational records."}</div>
     </>
   );
 }
