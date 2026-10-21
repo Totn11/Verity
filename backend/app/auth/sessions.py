@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import hashlib
-import secrets
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import Request, Response
+from jwt import InvalidTokenError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
+from app.auth.tokens import encode_token, issue_claims, verify_token
 from app.db.models import Session as UserSession
 from app.db.models import User
 
-COOKIE_NAME = "verity_session"
+COOKIE_NAME = "__Host-verity_session"
 SESSION_TTL = timedelta(hours=8)
 SESSION_TTL_SECONDS = int(SESSION_TTL.total_seconds())
 
@@ -32,10 +34,13 @@ async def create_session(
     response: Response,
     db: AsyncSession,
 ) -> str:
-    token = secrets.token_urlsafe(48)
     now = datetime.now(UTC)
+    session_id = uuid.uuid4()
+    claims = issue_claims(user, session_id, now=now)
+    token = encode_token(claims)
     db.add(
         UserSession(
+            id=session_id,
             user_id=user.id,
             token_hash=hash_token(token),
             issued_at=now,
@@ -52,8 +57,9 @@ async def create_session(
         httponly=True,
         secure=True,
         samesite="lax",
-        path="/api",
+        path="/",
     )
+    request.state.auth_claims = claims
     return token
 
 
@@ -62,11 +68,20 @@ async def read_session(request: Request, db: AsyncSession) -> User | None:
     if not token:
         return None
 
+    try:
+        claims = verify_token(token)
+        session_id = uuid.UUID(claims["sid"])
+        user_id = uuid.UUID(claims["sub"])
+    except InvalidTokenError:
+        return None
+
     now = datetime.now(UTC)
     result = await db.execute(
         select(UserSession)
         .options(joinedload(UserSession.user))
         .where(
+            UserSession.id == session_id,
+            UserSession.user_id == user_id,
             UserSession.token_hash == hash_token(token),
             UserSession.revoked_at.is_(None),
             UserSession.expires_at > now,
@@ -80,8 +95,12 @@ async def read_session(request: Request, db: AsyncSession) -> User | None:
         or session.revoked_at is not None
         or session.expires_at <= now
         or not session.user.is_active
+        or session.user_id != user_id
+        or session.user.id != user_id
+        or session.user.session_version != claims["ver"]
     ):
         return None
+    request.state.auth_claims = claims
     return session.user
 
 
@@ -89,8 +108,14 @@ async def revoke_session(request: Request, db: AsyncSession) -> bool:
     token = request.cookies.get(COOKIE_NAME)
     if not token:
         return False
+    try:
+        claims = verify_token(token)
+        session_id = uuid.UUID(claims["sid"])
+    except InvalidTokenError:
+        return False
     result = await db.execute(
         select(UserSession).where(
+            UserSession.id == session_id,
             UserSession.token_hash == hash_token(token),
             UserSession.revoked_at.is_(None),
         )

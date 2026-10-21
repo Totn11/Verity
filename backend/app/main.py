@@ -35,6 +35,7 @@ from app.auth.sessions import (
     read_session,
     revoke_session,
 )
+from app.auth.tokens import TokenConfigurationError
 from app.api.v1 import router as api_v1_router
 from app.db.models import User
 from app.db.session import get_engine, get_session
@@ -67,6 +68,9 @@ class SignInRequest(BaseModel):
 class SessionResponse(BaseModel):
     authenticated: bool
     email: str
+    user_id: str
+    role: str
+    expires_at: int
 
 
 def _allowed_origins() -> list[str]:
@@ -210,7 +214,10 @@ async def sign_in(
         else None
     }
     user.last_login_at = now
-    await create_session(user, request, response, db)
+    try:
+        await create_session(user, request, response, db)
+    except TokenConfigurationError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     await AuditService(request, SqlAuditRepository(db)).record(
         user,
         LOGIN_SUCCESS_ACTION,
@@ -221,16 +228,32 @@ async def sign_in(
     )
     response.headers["Cache-Control"] = "no-store"
     await db.commit()
-    return SessionResponse(authenticated=True, email=user.email)
+    claims = request.state.auth_claims
+    return SessionResponse(
+        authenticated=True,
+        email=user.email,
+        user_id=claims["sub"],
+        role=claims["role"],
+        expires_at=claims["exp"],
+    )
 
 
 @authenticated_auth_router.get("/session", response_model=SessionResponse)
+@authenticated_auth_router.get("/me", response_model=SessionResponse)
 def current_session(
+    request: Request,
     response: Response,
     user: User = Depends(require_user),
 ) -> SessionResponse:
     response.headers["Cache-Control"] = "no-store"
-    return SessionResponse(authenticated=True, email=user.email)
+    claims = request.state.auth_claims
+    return SessionResponse(
+        authenticated=True,
+        email=user.email,
+        user_id=str(user.id),
+        role=claims["role"],
+        expires_at=claims["exp"],
+    )
 
 
 @public_auth_router.post("/logout", status_code=204)
@@ -240,7 +263,10 @@ async def sign_out(
     db: AsyncSession = Depends(get_session),
 ) -> None:
     response.headers["Cache-Control"] = "no-store"
-    user = await read_session(request, db)
+    try:
+        user = await read_session(request, db)
+    except TokenConfigurationError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     await revoke_session(request, db)
     await AuditService(request, SqlAuditRepository(db)).record(
         user,
@@ -256,7 +282,7 @@ async def sign_out(
         httponly=True,
         secure=True,
         samesite="lax",
-        path="/api",
+        path="/",
     )
 
 

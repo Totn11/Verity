@@ -11,8 +11,10 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Enum,
+    event,
     ForeignKey,
     Index,
+    inspect,
     Integer,
     Numeric,
     String,
@@ -76,6 +78,9 @@ class User(Base):
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[UserRole] = mapped_column(_enum(UserRole, "user_role"), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    session_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -89,6 +94,13 @@ class User(Base):
         back_populates="actor", foreign_keys="AttendanceEvent.actor_user_id"
     )
     audit_events: Mapped[list[AuditEvent]] = relationship(back_populates="actor")
+
+
+@event.listens_for(User, "before_update")
+def _bump_session_version_for_credential_changes(mapper, connection, user: User) -> None:
+    state = inspect(user)
+    if state.attrs.role.history.has_changes() or state.attrs.password_hash.history.has_changes():
+        user.session_version += 1
 
 
 class Session(Base):

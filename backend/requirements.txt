@@ -9,3 +9,4 @@ alembic
 asyncpg
 pydantic-settings
 argon2-cffi
+PyJWT[crypto]>=2.8

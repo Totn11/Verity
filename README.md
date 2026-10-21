@@ -30,7 +30,7 @@ Configure `DATABASE_URL` with a PostgreSQL async connection URL before starting 
 export DATABASE_URL='postgresql+asyncpg://user:password@localhost:5432/verity'
 ```
 
-The database layer does not create tables automatically. Apply migrations from `backend/` with `alembic upgrade head`. `GET /api/health` reports API health and returns `"database": "unavailable"` if the database is not configured or cannot be reached. Authentication requests return HTTP 503 with a configuration message when `DATABASE_URL` is missing.
+The database layer does not create tables automatically. Apply migrations from `backend/` with `alembic upgrade head`. `GET /api/health` reports API health and returns `"database": "unavailable"` if the database is not configured or cannot be reached. Authentication requests return HTTP 503 when `DATABASE_URL` or the required JWT key configuration is missing.
 
 Each API response includes an `X-Request-Id` UUID generated for that request. Successful person and attendance mutations, plus login and logout attempts, write before/after snapshots to `audit_events` in the same transaction as the business operation. A PostgreSQL trigger rejects `UPDATE` and `DELETE` against that table; apply the latest migration with `alembic upgrade head`.
 
@@ -60,14 +60,25 @@ curl -b cookies.txt -F 'file=@people.csv;type=text/csv' \
 
 Create a room with `POST /api/v1/rooms` and JSON containing `code`, `name`, `floor`, `capacity`, `pos_x`, and `pos_y`. Both import and room creation require an authenticated admin account.
 
-Create the first database-backed account after setting `DATABASE_URL` and applying migrations:
+Set up Ed25519 signing keys before enabling authentication. Keep the private key in the API host's secret environment variables; never commit it. Generate a signing key pair locally with:
+
+```bash
+openssl genpkey -algorithm Ed25519 -out verity-ed25519-private.pem
+openssl pkey -in verity-ed25519-private.pem -pubout -out verity-ed25519-public.pem
+```
+
+Configure `VERITY_JWT_SIGNING_KID` to a key ID such as `verity-2026-01`, `VERITY_JWT_PRIVATE_KEY` to the private PEM, `VERITY_JWT_PUBLIC_KEYS` to a JSON object mapping that key ID to its public PEM, and `VERITY_JWT_AUDIENCE` to the public application origin (for example, `https://app.example.com`, without a path). Store PEM newlines as `\n` when entering the values in a single-line environment-variable field. Use the same audience for the frontend origin served by that API; a token with a different audience is rejected.
+
+For key rotation, add the new public key alongside the existing public key, deploy the new private key and signing key ID, and retain the old public key for at least the eight-hour token lifetime plus clock-skew allowance. Remove the old public key only after tokens signed by it have expired.
+
+Create the first database-backed account after setting `DATABASE_URL`, the JWT variables, and applying migrations:
 
 ```bash
 cd backend
 python -m app.cli create-user --email operator@example.com --role admin
 ```
 
-The CLI securely prompts for and confirms a password, then stores its Argon2 hash. Sign-in sessions are opaque random tokens; only their SHA-256 hashes are stored, and logout revokes the session in the database. Cookies are HttpOnly, Secure, SameSite=Lax, and expire after eight hours. Sign-in is rate-limited to five failures per IP hash in a 15-minute window.
+The CLI securely prompts for and confirms a password, then stores its Argon2 hash. Sign-in uses an EdDSA-signed JWT in an HttpOnly, Secure, SameSite=Lax `__Host-verity_session` cookie that expires after eight hours. The database stores only the JWT's SHA-256 hash and session metadata; every request also checks the session row for revocation, expiry, an active account, and the current session version. The token's `role` claim is advisory: authorization continues to use the database role. `/api/auth/me` and `/api/auth/session` return the verified user ID, role, and expiry for the frontend; the cookie remains HttpOnly and is never decoded in JavaScript. Sign-in is rate-limited to five failures per IP hash in a 15-minute window.
 
 The frontend development server proxies `/api` to `http://127.0.0.1:8000`. Keep the frontend and API on the same origin or behind a same-origin `/api` proxy so the session cookie is sent correctly. To load a trained notebook artifact, set `VERITY_SIAMESE_MODEL_PATH` to its path before starting Uvicorn. The API expects the notebook's saved `siamesemodel.h5` format; the artifact is not included in this repository. The optional `VERITY_SIAMESE_MATCH_THRESHOLD` defaults to `0.5`; calibrate it against an appropriate held-out dataset before any evaluation.
 
@@ -76,7 +87,7 @@ The frontend development server proxies `/api` to `http://127.0.0.1:8000`. Keep 
 The repository includes a Render Blueprint at `render.yaml` for the FastAPI service and Vercel configuration at `frontend/vercel.json` for the React single-page app and `/api` proxy.
 
 1. Push the repository to a Git provider.
-2. In Render, create a Blueprint from the repository and deploy the `verity-api` web service. The Blueprint marks `DATABASE_URL` as `sync: false`, so add it in the Render service's environment settings. Use an async SQLAlchemy URL in the form `postgresql+asyncpg://user:password@host:5432/database` that points to a provisioned PostgreSQL database. Apply migrations with `alembic upgrade head`, then create the first administrator with the CLI. A missing `DATABASE_URL` leaves the web process running but makes database-backed authentication unavailable; `/api/health` reports `"database": "unavailable"`.
+2. In Render, create a Blueprint from the repository and deploy the `verity-api` web service. The Blueprint prompts for `DATABASE_URL` and the four `VERITY_JWT_*` settings; configure the async SQLAlchemy URL and Ed25519 keys described above, with `VERITY_JWT_AUDIENCE` set to the public Vercel origin. Use a separate signing key and audience for each preview or production deployment so a token issued for one app origin is not accepted by another. Apply migrations with `alembic upgrade head`, then create the first administrator with the CLI. A missing `DATABASE_URL` leaves the web process running but makes database-backed authentication unavailable; `/api/health` reports `"database": "unavailable"`.
 3. In Vercel, import the same repository and set the project **Root Directory** to `frontend`. Keep the detected Vite build command (`npm run build`) and output directory (`dist`).
 4. The Vercel rewrite sends `/api/*` requests to `https://verity-api.onrender.com/api/*`. Browser-to-Vercel and Vercel-to-Render use HTTPS; Render terminates TLS and forwards HTTP internally to Uvicorn. This is expected: session cookies are explicitly `Secure`, so the browser only sends them over the HTTPS Vercel origin. Keep the Vercel rewrite same-origin from the browser. If Render assigns a different service hostname, change the rewrite destination in `frontend/vercel.json` and redeploy Vercel.
 5. Deploy Vercel and check `/api/recognition/status` on the Vercel domain. The API proxy makes these same-origin browser requests, including sign-in and session-cookie requests.

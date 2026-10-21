@@ -14,3 +14,11 @@ services:
         value: "0.5"
       - key: DATABASE_URL
         sync: false
+      - key: VERITY_JWT_SIGNING_KID
+        sync: false
+      - key: VERITY_JWT_PRIVATE_KEY
+        sync: false
+      - key: VERITY_JWT_PUBLIC_KEYS
+        sync: false
+      - key: VERITY_JWT_AUDIENCE
+        sync: false

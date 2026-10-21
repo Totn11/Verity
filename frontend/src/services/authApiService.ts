@@ -2,17 +2,27 @@ import { apiRequest } from "../lib/api";
 
 export type AuthenticatedUser = {
   email: string;
+  userId: string;
+  role: "admin" | "staff";
+  expiresAt: number;
 };
 
 async function requestSession(path: string, init?: RequestInit): Promise<AuthenticatedUser> {
   const payload: unknown = await apiRequest(`/api/auth/${path}`, init);
-  if (init?.method === "POST" && path === "logout") return { email: "" };
   if (typeof payload !== "object" || payload === null
     || !("authenticated" in payload) || payload.authenticated !== true
-    || !("email" in payload) || typeof payload.email !== "string") {
+    || !("email" in payload) || typeof payload.email !== "string"
+    || !("user_id" in payload) || typeof payload.user_id !== "string"
+    || !("role" in payload) || (payload.role !== "admin" && payload.role !== "staff")
+    || !("expires_at" in payload) || typeof payload.expires_at !== "number") {
     throw new Error("The authentication service returned an invalid response.");
   }
-  return { email: payload.email };
+  return {
+    email: payload.email,
+    userId: payload.user_id,
+    role: payload.role,
+    expiresAt: payload.expires_at,
+  };
 }
 
 export function getCurrentSession(): Promise<AuthenticatedUser> {
@@ -27,5 +37,5 @@ export function signIn(email: string, password: string): Promise<AuthenticatedUs
 }
 
 export async function signOut(): Promise<void> {
-  await requestSession("logout", { method: "POST" });
+  await apiRequest<void>("/api/auth/logout", { method: "POST" });
 }

@@ -7,6 +7,7 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.sessions import read_session
+from app.auth.tokens import TokenConfigurationError
 from app.db.models import User
 from app.db.session import get_session
 
@@ -22,7 +23,10 @@ async def require_user(
     db: AsyncSession = Depends(get_session),
 ) -> User:
     """Require a valid, active database-backed session."""
-    user = await read_session(request, db)
+    try:
+        user = await read_session(request, db)
+    except TokenConfigurationError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     if user is None:
         raise HTTPException(status_code=401, detail="Sign in is required.")
     return user
