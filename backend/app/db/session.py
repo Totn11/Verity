@@ -1,6 +1,8 @@
+import os
 from collections.abc import AsyncIterator
 from functools import lru_cache
 
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -22,5 +24,10 @@ def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:
+    if not os.getenv("DATABASE_URL", "").strip():
+        raise HTTPException(
+            status_code=503,
+            detail="Database is not configured. Set DATABASE_URL to enable authentication.",
+        )
     async with get_sessionmaker()() as session:
         yield session

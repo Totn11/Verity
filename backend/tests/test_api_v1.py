@@ -176,6 +176,105 @@ def test_people_create_update_and_room_listing(api_client) -> None:
     assert client.get(f"/api/v1/rooms/{room.id}").json()["code"] == "A-101"
 
 
+def test_people_csv_import_creates_and_audits_all_rows(api_client) -> None:
+    client, repositories, _ = api_client
+    csv_content = (
+        "external_ref,full_name,email,phone,department,title,status\n"
+        "import-1,Ada Lovelace,ada@example.com,555-0101,Research,Engineer,active\n"
+        "import-2,Grace Hopper,grace@example.com,555-0102,Engineering,Admiral,inactive\n"
+    )
+
+    response = client.post(
+        "/api/v1/people/import",
+        files={"file": ("people.csv", csv_content, "text/csv")},
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["created"] == 2
+    assert [person["external_ref"] for person in response.json()["items"]] == [
+        "import-1",
+        "import-2",
+    ]
+    people = asyncio.run(repositories.people.list())
+    assert len(people) == 2
+    audits = asyncio.run(repositories.audit.list())
+    assert [event.action for event in audits] == ["people.import", "people.import"]
+    assert all(event.request_id == response.headers["x-request-id"] for event in audits)
+
+
+def test_people_csv_import_is_admin_only(api_client) -> None:
+    client, _, user = api_client
+    user.role = "staff"
+    response = client.post(
+        "/api/v1/people/import",
+        files={
+            "file": (
+                "people.csv",
+                "external_ref,full_name,email,phone,department,title,status\n",
+                "text/csv",
+            )
+        },
+    )
+    assert response.status_code == 403
+
+
+def test_people_csv_import_rejects_invalid_or_duplicate_rows_without_partial_writes(api_client) -> None:
+    client, repositories, _ = api_client
+    csv_content = (
+        "external_ref,full_name,email,phone,department,title,status\n"
+        "import-1,Ada Lovelace,ada@example.com,555-0101,Research,Engineer,active\n"
+        "import-2,Grace Hopper,grace@example.com,555-0102,Engineering,Admiral,invalid-status\n"
+    )
+
+    invalid = client.post(
+        "/api/v1/people/import",
+        files={"file": ("people.csv", csv_content, "text/csv")},
+    )
+
+    assert invalid.status_code == 422
+    assert "row 3" in invalid.json()["detail"]
+    assert asyncio.run(repositories.people.list()) == []
+
+    duplicate_content = (
+        "external_ref,full_name,email,phone,department,title,status\n"
+        "import-1,Ada Lovelace,ada@example.com,555-0101,Research,Engineer,active\n"
+        "import-1,Grace Hopper,grace@example.com,555-0102,Engineering,Admiral,active\n"
+    )
+    duplicate = client.post(
+        "/api/v1/people/import",
+        files={"file": ("people.csv", duplicate_content, "text/csv")},
+    )
+    assert duplicate.status_code == 422
+    assert asyncio.run(repositories.people.list()) == []
+
+
+def test_room_create_is_admin_only_and_audited(api_client) -> None:
+    client, repositories, user = api_client
+    payload = {
+        "code": "A-101",
+        "name": "Meeting Room",
+        "floor": 1,
+        "capacity": 8,
+        "pos_x": 12.5,
+        "pos_y": 34.25,
+    }
+
+    user.role = "staff"
+    denied = client.post("/api/v1/rooms", json=payload)
+    assert denied.status_code == 403
+
+    user.role = "admin"
+    created = client.post("/api/v1/rooms", json=payload)
+    assert created.status_code == 201, created.text
+    assert created.json()["code"] == "A-101"
+    assert created.json()["floor"] == 1
+    assert client.get(f"/api/v1/rooms/{created.json()['id']}").status_code == 200
+    events = asyncio.run(repositories.audit.list())
+    assert len(events) == 1
+    assert events[0].action == "rooms.create"
+    assert events[0].request_id == created.headers["x-request-id"]
+
+
 def test_attendance_idempotency_filter_and_summary(api_client) -> None:
     client, repositories, _ = api_client
     person = asyncio.run(repositories.people.create(create_person("Visitor")))

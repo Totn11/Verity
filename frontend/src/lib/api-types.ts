@@ -31,6 +31,13 @@ export type Room = {
   pos_y: number;
 };
 
+export type RoomWrite = Omit<Room, "id">;
+
+export type PeopleImportResult = {
+  created: number;
+  items: Person[];
+};
+
 export type AttendanceEvent = {
   id: string;
   person_id: string;

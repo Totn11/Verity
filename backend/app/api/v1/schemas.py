@@ -55,6 +55,20 @@ class PersonRead(BaseModel):
     updated_at: datetime
 
 
+class PeopleImportRead(BaseModel):
+    created: int
+    items: list[PersonRead]
+
+
+class RoomCreate(BaseModel):
+    code: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=255)
+    floor: int
+    capacity: int = Field(ge=0)
+    pos_x: Decimal
+    pos_y: Decimal
+
+
 class RoomRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

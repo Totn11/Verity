@@ -86,6 +86,10 @@ export function usePersonMutations() {
         source.updatePerson(id, changes),
       onSuccess: invalidate,
     }),
+    import: useMutation({
+      mutationFn: (file: File) => api.importPeople(file),
+      onSuccess: invalidate,
+    }),
   };
 }
 

@@ -3,8 +3,10 @@ import type {
   AttendanceSummary,
   AttendanceWrite,
   Page,
+  PeopleImportResult,
   Person,
   Room,
+  RoomWrite,
 } from "./api-types";
 import type { PersonWrite } from "../data/facilityProvider";
 
@@ -108,6 +110,20 @@ export const api = {
       body: JSON.stringify(input),
     });
   },
+  importPeople(file: File): Promise<PeopleImportResult> {
+    const formData = new FormData();
+    formData.set("file", file);
+    return apiRequest<PeopleImportResult>("/api/v1/people/import", {
+      method: "POST",
+      body: formData,
+    });
+  },
+  createRoom(input: RoomWrite): Promise<Room> {
+    return apiRequest<Room>("/api/v1/rooms", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
   updatePerson(id: string, changes: Partial<PersonWrite>): Promise<Person> {
     return apiRequest<Person>(`/api/v1/people/${encodeURIComponent(id)}`, {
       method: "PATCH",
@@ -116,4 +132,4 @@ export const api = {
   },
 };
 
-export type { AttendanceEvent, AttendanceSummary, AttendanceWrite, Page, Person, Room };
+export type { AttendanceEvent, AttendanceSummary, AttendanceWrite, Page, PeopleImportResult, Person, Room, RoomWrite };

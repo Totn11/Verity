@@ -30,7 +30,7 @@ Configure `DATABASE_URL` with a PostgreSQL async connection URL before starting 
 export DATABASE_URL='postgresql+asyncpg://user:password@localhost:5432/verity'
 ```
 
-The database layer does not create tables automatically. After adding models and a migration, create and apply migrations from `backend/` with `alembic revision --autogenerate -m "describe schema"` followed by `alembic upgrade head`. `GET /api/health` reports API health and returns `"database": "unavailable"` if the database is not configured or cannot be reached.
+The database layer does not create tables automatically. Apply migrations from `backend/` with `alembic upgrade head`. `GET /api/health` reports API health and returns `"database": "unavailable"` if the database is not configured or cannot be reached. Authentication requests return HTTP 503 with a configuration message when `DATABASE_URL` is missing.
 
 Each API response includes an `X-Request-Id` UUID generated for that request. Successful person and attendance mutations, plus login and logout attempts, write before/after snapshots to `audit_events` in the same transaction as the business operation. A PostgreSQL trigger rejects `UPDATE` and `DELETE` against that table; apply the latest migration with `alembic upgrade head`.
 
@@ -42,13 +42,23 @@ The versioned facility API is rooted at `/api/v1` and uses server-enforced roles
 | --- | --- | --- |
 | `GET /people?q=&status=&limit=&cursor=` | admin, staff | Search and cursor-page people |
 | `GET /people/{person_id}` | admin, staff | Get a person |
-| `POST /people`, `PATCH /people/{person_id}`, `PUT /people/{person_id}` | admin | Create or update people |
+| `POST /people`, `POST /people/import`, `PATCH /people/{person_id}`, `PUT /people/{person_id}` | admin | Create, CSV-import, or update people |
 | `GET /rooms`, `GET /rooms/{room_id}` | admin, staff | Cursor-page rooms or get a room |
+| `POST /rooms` | admin | Create a room |
 | `GET /attendance?person_id=&from=&to=&limit=&cursor=` | admin, staff | Filter and cursor-page events |
 | `POST /attendance/check-in`, `POST /attendance/check-out` | admin, staff | Record a manual attendance event |
 | `GET /reports/attendance-summary?from=&to=&limit=&cursor=` | admin, staff | Daily check-in/out counts grouped by room |
 
 Collection responses use `{"items": [...], "next_cursor": "..."}`; cursor values are opaque and should be passed back unchanged. Timestamp filters and event timestamps must include a timezone and are normalized to UTC. Check-in/out accept an optional `Idempotency-Key` header, which is stored as the event's source-event ID.
+
+People CSV imports use `POST /api/v1/people/import` as multipart form data with a `file` field. Include these headers: `external_ref,full_name,email,phone,department,title,status`; `photo_url` is optional. Status values are `active`, `inactive`, or `visitor`. Imports are validated before writing, limited to 5 MiB and 1,000 rows, and rejected as a whole if a row is invalid or a person ID/email already exists. Example:
+
+```bash
+curl -b cookies.txt -F 'file=@people.csv;type=text/csv' \
+  https://your-frontend-domain.example/api/v1/people/import
+```
+
+Create a room with `POST /api/v1/rooms` and JSON containing `code`, `name`, `floor`, `capacity`, `pos_x`, and `pos_y`. Both import and room creation require an authenticated admin account.
 
 Create the first database-backed account after setting `DATABASE_URL` and applying migrations:
 
@@ -66,12 +76,12 @@ The frontend development server proxies `/api` to `http://127.0.0.1:8000`. Keep 
 The repository includes a Render Blueprint at `render.yaml` for the FastAPI service and Vercel configuration at `frontend/vercel.json` for the React single-page app and `/api` proxy.
 
 1. Push the repository to a Git provider.
-2. In Render, create a Blueprint from the repository and deploy the `verity-api` web service. Configure `DATABASE_URL` for the PostgreSQL database, then create the first administrator with the CLI. Its health check is `/api/recognition/status`; without model weights it should report `disabled`, which is healthy and expected.
+2. In Render, create a Blueprint from the repository and deploy the `verity-api` web service. The Blueprint marks `DATABASE_URL` as `sync: false`, so add it in the Render service's environment settings. Use an async SQLAlchemy URL in the form `postgresql+asyncpg://user:password@host:5432/database` that points to a provisioned PostgreSQL database. Apply migrations with `alembic upgrade head`, then create the first administrator with the CLI. A missing `DATABASE_URL` leaves the web process running but makes database-backed authentication unavailable; `/api/health` reports `"database": "unavailable"`.
 3. In Vercel, import the same repository and set the project **Root Directory** to `frontend`. Keep the detected Vite build command (`npm run build`) and output directory (`dist`).
-4. The Vercel rewrite sends `/api/*` requests to `https://verity-api.onrender.com/api/*`. If Render assigns a different service hostname, change the rewrite destination in `frontend/vercel.json` and redeploy Vercel.
+4. The Vercel rewrite sends `/api/*` requests to `https://verity-api.onrender.com/api/*`. Browser-to-Vercel and Vercel-to-Render use HTTPS; Render terminates TLS and forwards HTTP internally to Uvicorn. This is expected: session cookies are explicitly `Secure`, so the browser only sends them over the HTTPS Vercel origin. Keep the Vercel rewrite same-origin from the browser. If Render assigns a different service hostname, change the rewrite destination in `frontend/vercel.json` and redeploy Vercel.
 5. Deploy Vercel and check `/api/recognition/status` on the Vercel domain. The API proxy makes these same-origin browser requests, including sign-in and session-cookie requests.
 
-This is a deployment of the current prototype: authentication, sessions, audit events, and the initial facility schema use PostgreSQL, and `/api/v1` applies server-side role authorization. The frontend's facility views still use illustrative in-memory data and are not yet wired to those endpoints. Render's `starter` web service is a paid, always-on service; check current Render pricing before deploying. Do not deploy real personal or biometric data. Before production use, complete deployment-specific session and abuse controls, operational data retention and backup policies, and an approved biometric-data policy. Model weights are intentionally not bundled or configured.
+This is a deployment of the current prototype: authentication, sessions, audit events, and facility data use PostgreSQL when `VITE_DATA_SOURCE=api`, and `/api/v1` applies server-side role authorization. Demo mode remains in-memory and is the frontend default. Render's `starter` web service is a paid, always-on service; check current Render pricing before deploying. Do not deploy real personal or biometric data. Before production use, complete deployment-specific session and abuse controls, operational data retention and backup policies, and an approved biometric-data policy. Model weights are intentionally not bundled or configured.
 
 `GET /api/recognition/status` reports whether the model can be loaded. `POST /api/recognition/verify` accepts two JPEG files (`probe` and `reference`) and returns a pairwise similarity score and threshold result. Images are validated and processed in memory; they are not saved. This model compares a supplied pair and does not identify an unknown face against the people directory. The terminal only displays API readiness; it does not send camera frames to the API. There is no enrollment-image gallery or model artifact in this prototype, so terminal recognition and attendance actions remain mock-only.
 

@@ -107,6 +107,20 @@ class DatabaseLayerTests(unittest.TestCase):
                 {"status": "ok", "database": "unavailable"},
             )
 
+    def test_auth_session_returns_service_unavailable_when_database_url_is_missing(self) -> None:
+        get_settings.cache_clear()
+        get_engine.cache_clear()
+        with patch.dict(os.environ, {}, clear=True):
+            response = TestClient(app).get("/api/auth/session")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.json(),
+            {
+                "detail": "Database is not configured. Set DATABASE_URL to enable authentication."
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

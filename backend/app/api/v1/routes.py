@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import csv
+import io
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, UploadFile, status
+from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 
 from app.auth.dependencies import require_role
 from app.db.models import (
@@ -27,6 +31,8 @@ from app.api.v1.schemas import (
     PersonCreate,
     PersonRead,
     PersonUpdate,
+    PeopleImportRead,
+    RoomCreate,
     RoomRead,
 )
 
@@ -40,6 +46,10 @@ people_read = APIRouter(
 people_write = APIRouter(
     prefix="/people",
     dependencies=[Depends(people_write_guard)],
+)
+rooms_write = APIRouter(
+    prefix="/rooms",
+    dependencies=[Depends(require_role("admin"))],
 )
 rooms_read = APIRouter(
     prefix="/rooms",
@@ -61,6 +71,18 @@ reports_read = APIRouter(
 
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 100
+MAX_IMPORT_BYTES = 5 * 1024 * 1024
+MAX_IMPORT_ROWS = 1000
+PEOPLE_IMPORT_COLUMNS = (
+    "external_ref",
+    "full_name",
+    "email",
+    "phone",
+    "department",
+    "title",
+    "status",
+)
+OPTIONAL_PEOPLE_IMPORT_COLUMNS = {"photo_url"}
 
 
 def _read_cursor(cursor: str | None) -> dict[str, str] | None:
@@ -157,6 +179,113 @@ async def create_person(
     return person
 
 
+@people_write.post("/import", response_model=PeopleImportRead, status_code=status.HTTP_201_CREATED)
+async def import_people_csv(
+    request: Request,
+    file: UploadFile = File(...),
+    actor: User = Depends(people_write_guard),
+    repositories: RepositorySet = Depends(get_repositories),
+) -> PeopleImportRead:
+    contents = await file.read(MAX_IMPORT_BYTES + 1)
+    if len(contents) > MAX_IMPORT_BYTES:
+        raise HTTPException(status_code=413, detail="CSV file must be 5 MiB or smaller.")
+    try:
+        text_contents = contents.decode("utf-8-sig")
+        rows = list(csv.reader(io.StringIO(text_contents, newline=""), strict=True))
+    except (UnicodeDecodeError, csv.Error) as error:
+        raise HTTPException(status_code=422, detail="CSV must be valid UTF-8 with valid CSV quoting.") from error
+    if not rows:
+        raise HTTPException(status_code=422, detail="CSV file is empty.")
+
+    headers = rows[0]
+    if (
+        len(headers) != len(set(headers))
+        or not set(PEOPLE_IMPORT_COLUMNS).issubset(headers)
+        or set(headers) - set(PEOPLE_IMPORT_COLUMNS) - OPTIONAL_PEOPLE_IMPORT_COLUMNS
+    ):
+        required = ", ".join(PEOPLE_IMPORT_COLUMNS)
+        raise HTTPException(
+            status_code=422,
+            detail=f"CSV header must contain exactly these columns, with optional photo_url: {required}.",
+        )
+
+    payloads: list[PersonCreate] = []
+    seen_refs: set[str] = set()
+    seen_emails: set[str] = set()
+    for row_number, row in enumerate(rows[1:], start=2):
+        if not row or all(not value.strip() for value in row):
+            continue
+        if len(row) != len(headers):
+            raise HTTPException(status_code=422, detail=f"CSV row {row_number} has the wrong number of columns.")
+        values = dict(zip(headers, row, strict=True))
+        try:
+            person_payload = PersonCreate.model_validate(values)
+        except ValidationError as error:
+            details = "; ".join(
+                f"{'.'.join(str(part) for part in issue['loc'])}: {issue['msg']}"
+                for issue in error.errors()
+            )
+            raise HTTPException(status_code=422, detail=f"Invalid CSV row {row_number}: {details}") from error
+
+        external_ref = person_payload.external_ref.casefold()
+        email = person_payload.email.casefold()
+        if external_ref in seen_refs or email in seen_emails:
+            raise HTTPException(status_code=422, detail=f"CSV row {row_number} duplicates an ID or email in the file.")
+        seen_refs.add(external_ref)
+        seen_emails.add(email)
+        payloads.append(person_payload)
+        if len(payloads) > MAX_IMPORT_ROWS:
+            raise HTTPException(status_code=413, detail=f"CSV may contain at most {MAX_IMPORT_ROWS} people.")
+
+    if not payloads:
+        raise HTTPException(status_code=422, detail="CSV contains no people to import.")
+
+    existing_refs: set[str] = set()
+    existing_emails: set[str] = set()
+    offset = 0
+    while True:
+        existing_people = await repositories.people.list(limit=100, offset=offset)
+        for person in existing_people:
+            existing_refs.add(person.external_ref.casefold())
+            existing_emails.add(person.email.casefold())
+        if len(existing_people) < 100:
+            break
+        offset += len(existing_people)
+    for person_payload in payloads:
+        if (
+            person_payload.external_ref.casefold() in existing_refs
+            or person_payload.email.casefold() in existing_emails
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Person ID or email already exists: {person_payload.external_ref}. No records were imported.",
+            )
+
+    created: list[Person] = []
+    try:
+        for person_payload in payloads:
+            person = await repositories.people.create(Person(**person_payload.model_dump()))
+            created.append(person)
+            await AuditService(request, repositories.audit).record(
+                actor,
+                "people.import",
+                "person",
+                str(person.id),
+                {},
+                PersonRead.model_validate(person).model_dump(mode="json"),
+            )
+    except IntegrityError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="A person ID or email already exists. No records were imported.",
+        ) from error
+
+    return PeopleImportRead(
+        created=len(created),
+        items=[PersonRead.model_validate(person) for person in created],
+    )
+
+
 @people_write.patch("/{person_id}", response_model=PersonRead)
 async def update_person(
     person_id: uuid.UUID,
@@ -240,6 +369,25 @@ async def get_room(
     room = await repositories.rooms.get(room_id)
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found.")
+    return room
+
+
+@rooms_write.post("", response_model=RoomRead, status_code=status.HTTP_201_CREATED)
+async def create_room(
+    payload: RoomCreate,
+    request: Request,
+    actor: User = Depends(require_role("admin")),
+    repositories: RepositorySet = Depends(get_repositories),
+) -> Room:
+    room = await repositories.rooms.create(Room(**payload.model_dump()))
+    await AuditService(request, repositories.audit).record(
+        actor,
+        "rooms.create",
+        "room",
+        str(room.id),
+        {},
+        RoomRead.model_validate(room).model_dump(mode="json"),
+    )
     return room
 
 
@@ -379,6 +527,7 @@ async def attendance_summary(
 for protected_router in (
     people_read,
     people_write,
+    rooms_write,
     rooms_read,
     attendance_read,
     attendance_write,

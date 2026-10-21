@@ -1,6 +1,6 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
-import { Activity, ArrowLeft, ArrowRight, Building2, CalendarDays, Check, ChevronDown, CircleAlert, Download, Filter, Fingerprint, KeyRound, LayoutGrid, List, MapPin, MoreHorizontal, Pencil, Search, Settings2, ShieldCheck, UserPlus, Users, UserRoundX } from "lucide-react";
+import { Activity, ArrowLeft, ArrowRight, Building2, CalendarDays, Check, ChevronDown, CircleAlert, Download, Filter, Fingerprint, KeyRound, LayoutGrid, List, MapPin, MoreHorizontal, Pencil, Search, Settings2, ShieldCheck, Upload, UserPlus, Users, UserRoundX } from "lucide-react";
 import Avatar from "../components/Avatar";
 import DataTable from "../components/DataTable";
 import FacilityMapPage from "../components/FacilityMapPage";
@@ -180,12 +180,14 @@ export function DirectoryPage() {
   const [page, setPage] = useState(0);
   const [editing, setEditing] = useState<Person | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const csvInput = useRef<HTMLInputElement>(null);
   const facility = useFacilityQueries();
   const people = facility.people.data ?? [];
   const { role: userRole } = usePeople();
   const personMutations = usePersonMutations();
   const mutationError = personMutations.create.error ?? personMutations.update.error;
   const [operationError, setOperationError] = useState<string | null>(null);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
   const canManageDirectory = userRole === "administrator";
   const pageSize = view === "table" ? 6 : 8;
   const departments = useMemo(() => Array.from(new Set(people.map((person) => person.department))).sort(), [people]);
@@ -233,6 +235,20 @@ export function DirectoryPage() {
     }
   }
 
+  async function handleCsvImport(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setOperationError(null);
+    setImportMessage(null);
+    try {
+      const result = await personMutations.import.mutateAsync(file);
+      setImportMessage(`Imported ${result.created} people successfully.`);
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : "Could not import this CSV file.");
+    }
+  }
+
   function clearFilters() {
     setQuery("");
     setDepartment("All departments");
@@ -248,10 +264,11 @@ export function DirectoryPage() {
 
   return (
     <>
-      <PageHeader eyebrow="DIRECTORY" title="People directory" description="View authorized facility profiles, registration, and attendance information." action={canManageDirectory ? <button className="button button-primary" onClick={() => setAddOpen(true)}><UserPlus size={16} /> Register person</button> : undefined} />
+      <PageHeader eyebrow="DIRECTORY" title="People directory" description="View authorized facility profiles, registration, and attendance information." action={canManageDirectory ? <div className="directory-header-actions">{facility.isApi && <><input ref={csvInput} type="file" accept=".csv,text/csv" hidden onChange={(event) => void handleCsvImport(event)} /><button className="button button-secondary" onClick={() => csvInput.current?.click()} disabled={personMutations.import.isPending}><Upload size={16} /> {personMutations.import.isPending ? "Importing…" : "Import CSV"}</button></>}<button className="button button-primary" onClick={() => setAddOpen(true)}><UserPlus size={16} /> Register person</button></div> : undefined} />
       <div className="directory-summary"><div><span className="summary-icon"><Users size={17} /></span><span><strong>{activeCount} active registrations</strong><small>{people.length} {facility.isApi ? "people" : "fictional demo profiles"} · {departments.length} departments</small></span></div><div className="summary-right"><span className="summary-present"><i /> {presentCount} present</span><span className="summary-absent"><i /> {activeCount - presentCount} not confirmed</span></div></div>
-      <div className="directory-privacy"><ShieldCheck size={15} /><span>Prototype role-based UI only—not access control. This directory uses fictional records; uploaded photos are not used to match arbitrary images.</span></div>
+      <div className="directory-privacy"><ShieldCheck size={15} /><span>Prototype role-based UI only—not access control. {facility.isApi ? "Directory records are loaded from the facility API." : "This directory uses fictional records."} Uploaded photos are not used to match arbitrary images.</span></div>
       <div className="panel directory-panel">
+        {importMessage && <div className="directory-empty" role="status"><strong>{importMessage}</strong></div>}
         {(operationError || mutationError) && <div className="directory-empty" role="alert"><strong>Could not save directory changes</strong><p>{operationError ?? mutationError?.message}</p></div>}
         <div className="directory-toolbar">
           <label className="search-field directory-search"><Search size={16} /><input aria-label="Search people by name or ID" value={query} onChange={(event) => { setQuery(event.target.value); setPage(0); setSearchParams(event.target.value ? { search: event.target.value } : {}); }} placeholder="Search name or ID..." /></label>
