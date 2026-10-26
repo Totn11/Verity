@@ -36,7 +36,9 @@ from app.auth.sessions import (
     revoke_session,
 )
 from app.auth.tokens import TokenConfigurationError
-from app.api.v1 import router as api_v1_router
+from app.api.v1.academic import router as academic_router
+from app.api.v1.recognition import router as recognition_api_router
+from app.api.v1.sync import router as sync_router
 from app.db.models import User
 from app.db.session import get_engine, get_session
 from app.repositories.sql import SqlAuditRepository
@@ -80,7 +82,7 @@ def _allowed_origins() -> list[str]:
     return ["http://localhost:5173", "http://127.0.0.1:5173"]
 
 
-app = FastAPI(title="Verity Facility API")
+app = FastAPI(title="Verity Classroom Attendance API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins(),
@@ -110,56 +112,6 @@ recognition_router = APIRouter(
     prefix="/api/recognition",
     dependencies=[Depends(require_role("admin", "staff"))],
 )
-
-people_read_router = APIRouter(
-    prefix="/api/people",
-    dependencies=[Depends(require_role("admin", "staff"))],
-)
-people_write_router = APIRouter(
-    prefix="/api/people",
-    dependencies=[Depends(require_role("admin"))],
-)
-rooms_read_router = APIRouter(
-    prefix="/api/rooms",
-    dependencies=[Depends(require_role("admin", "staff"))],
-)
-rooms_write_router = APIRouter(
-    prefix="/api/rooms",
-    dependencies=[Depends(require_role("admin"))],
-)
-attendance_read_router = APIRouter(
-    prefix="/api/attendance",
-    dependencies=[Depends(require_role("admin", "staff"))],
-)
-reports_read_router = APIRouter(
-    prefix="/api/reports",
-    dependencies=[Depends(require_role("admin", "staff"))],
-)
-roles_admin_router = APIRouter(
-    prefix="/api/roles",
-    dependencies=[Depends(require_role("admin"))],
-)
-audit_admin_router = APIRouter(
-    prefix="/api/audit",
-    dependencies=[Depends(require_role("admin"))],
-)
-users_admin_router = APIRouter(
-    prefix="/api/users",
-    dependencies=[Depends(require_role("admin"))],
-)
-
-AUTHORIZATION_ROUTERS = {
-    "people reads": people_read_router,
-    "people writes": people_write_router,
-    "rooms reads": rooms_read_router,
-    "rooms writes": rooms_write_router,
-    "attendance reads": attendance_read_router,
-    "reports reads": reports_read_router,
-    "role management": roles_admin_router,
-    "audit-log viewing": audit_admin_router,
-    "user management": users_admin_router,
-}
-
 
 @app.get("/api/health")
 async def health() -> dict[str, str]:
@@ -286,7 +238,6 @@ async def sign_out(
     )
 
 
-# Existing unversioned routes are retained unchanged alongside the /api/v1 API.
 @app.get("/api/recognition/status", response_model=RecognitionStatus)
 def recognition_status() -> RecognitionStatus:
     return RecognitionStatus(**verifier.status())
@@ -319,8 +270,9 @@ for router in (
     public_auth_router,
     authenticated_auth_router,
     recognition_router,
-    *AUTHORIZATION_ROUTERS.values(),
 ):
     app.include_router(router)
 
-app.include_router(api_v1_router)
+app.include_router(academic_router)
+app.include_router(recognition_api_router)
+app.include_router(sync_router)

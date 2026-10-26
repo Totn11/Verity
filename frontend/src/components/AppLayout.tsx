@@ -1,64 +1,64 @@
 import { useState, type FormEvent } from "react";
-import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
 import {
-  Activity, Bell, Building2, ChevronDown, ClipboardCheck, FileBarChart2,
-  Fingerprint, LayoutDashboard, LogOut, Menu, Search, Settings, Users, X,
-  ScrollText, UserCog, ScanFace,
+  Activity, BookOpenCheck, CalendarCheck, ClipboardList, FileBarChart2,
+  Fingerprint, GraduationCap, LayoutDashboard, LogOut, Menu, Search,
+  Settings, ShieldCheck, ScanFace, UserPlus, Users, X,
 } from "lucide-react";
 import { useAuth } from "../data/AuthContext";
-import { usePeople } from "../data/PeopleContext";
 
-const navGroups: { label: string; links: { to: string; label: string; icon: LucideIcon; badge?: string; end?: boolean }[] }[] = [
+const navGroups: { label: string; links: { to: string; label: string; icon: LucideIcon; end?: boolean }[] }[] = [
   {
-    label: "WORKSPACE",
+    label: "ATTENDANCE",
     links: [
       { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
-      { to: "/attendance", label: "Attendance", icon: Activity },
-      { to: "/people", label: "People", icon: Users },
-      { to: "/facility", label: "Facility map", icon: Building2 },
+      { to: "/students", label: "Students", icon: Users },
+      { to: "/facial-enrolment", label: "Facial Enrolment", icon: UserPlus },
+      { to: "/courses", label: "Courses and Classes", icon: GraduationCap },
+      { to: "/attendance", label: "Attendance Sessions", icon: CalendarCheck },
+      { to: "/recognition", label: "Live Recognition", icon: ScanFace },
+      { to: "/records", label: "Attendance Records", icon: ClipboardList },
       { to: "/reports", label: "Reports", icon: FileBarChart2 },
-      { to: "/check-in", label: "Recognition terminal", icon: ScanFace },
     ],
   },
   {
     label: "ADMINISTRATION",
     links: [
-      { to: "/users", label: "User management", icon: UserCog },
-      { to: "/audit", label: "Audit logs", icon: ScrollText },
+      { to: "/users", label: "Users and Permissions", icon: ShieldCheck },
+      { to: "/audit", label: "Audit Logs", icon: Activity },
       { to: "/settings", label: "Settings", icon: Settings },
     ],
   },
 ];
 
+const pageTitles: Record<string, string> = {
+  "/": "Dashboard",
+  "/students": "Students",
+  "/facial-enrolment": "Facial Enrolment",
+  "/courses": "Courses and Classes",
+  "/attendance": "Attendance Sessions",
+  "/recognition": "Live Recognition",
+  "/records": "Attendance Records",
+  "/reports": "Reports",
+  "/users": "Users and Permissions",
+  "/audit": "Audit Logs",
+  "/settings": "Settings",
+};
+
 export default function AppLayout() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [profileOpen, setProfileOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
-  const { role, setRole } = usePeople();
   const { user, signOut } = useAuth();
   const [signOutError, setSignOutError] = useState<string | null>(null);
-  const accountInitials = user?.email.split("@")[0].slice(0, 2).toUpperCase() ?? "AC";
-  const pageTitles: Record<string, string> = {
-    "/": "Dashboard",
-    "/attendance": "Attendance",
-    "/people": "People",
-    "/facility": "Facility map",
-    "/reports": "Reports",
-    "/check-in": "Recognition terminal",
-    "/users": "User management",
-    "/audit": "Audit logs",
-    "/settings": "Settings",
-    "/login": "Login",
-  };
-  const pageName = pageTitles[location.pathname] ?? (location.pathname.startsWith("/people/") ? "Person profile" : "Dashboard");
+  const pageName = pageTitles[location.pathname] ?? "Verity";
+  const initials = user?.email.slice(0, 2).toUpperCase() ?? "VT";
 
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    navigate(search.trim() ? `/people?search=${encodeURIComponent(search.trim())}` : "/people");
+    navigate(search.trim() ? `/students?search=${encodeURIComponent(search.trim())}` : "/students");
     setSearch("");
   }
 
@@ -81,20 +81,17 @@ export default function AppLayout() {
           <span className="brand-name">verity<span>.</span></span>
           <button className="icon-button sidebar-close" aria-label="Close menu" onClick={() => setMenuOpen(false)}><X size={18} /></button>
         </div>
-        <button className="workspace-select">
-          <span className="workspace-icon"><Building2 size={17} /></span>
-          <span className="workspace-copy"><strong>Northstar HQ</strong><small>Enterprise plan</small></span>
-          <ChevronDown size={15} className="workspace-chevron" />
-        </button>
+        <div className="workspace-select" aria-label="Current workspace">
+          <span className="workspace-icon"><BookOpenCheck size={17} /></span>
+          <span className="workspace-copy"><strong>Classroom workspace</strong><small>Attendance management</small></span>
+        </div>
         <nav className="sidebar-nav" aria-label="Main navigation">
-          {navGroups.filter((group) => role === "administrator" || group.label !== "ADMINISTRATION").map((group) => (
+          {navGroups.map((group) => (
             <div className="nav-group" key={group.label}>
               <div className="nav-label">{group.label}</div>
-              {group.links.map(({ to, label, icon: Icon, badge, end }) => (
+              {group.links.map(({ to, label, icon: Icon, end }) => (
                 <NavLink key={to} to={to} end={end} onClick={() => setMenuOpen(false)} className={({ isActive }) => `nav-link ${isActive ? "nav-link-active" : ""}`}>
-                  <Icon size={18} strokeWidth={1.8} />
-                  <span>{label}</span>
-                  {badge && <span className="nav-live">{badge}</span>}
+                  <Icon size={18} strokeWidth={1.8} /><span>{label}</span>
                 </NavLink>
               ))}
             </div>
@@ -102,15 +99,13 @@ export default function AppLayout() {
         </nav>
         <div className="sidebar-bottom">
           <div className="help-card">
-            <div className="help-icon"><ClipboardCheck size={17} /></div>
-            <strong>Need a hand?</strong>
-            <span>Visit the help center for setup guides.</span>
-            <a href="mailto:support@verity.example">Get support <span aria-hidden="true">↗</span></a>
+            <div className="help-icon"><ShieldCheck size={17} /></div>
+            <strong>Privacy-first attendance</strong>
+            <span>Camera preview is local. Recognition and offline sync are not enabled.</span>
           </div>
-          <label className="demo-role-control sidebar-demo-role">Prototype role<select aria-label="Switch prototype role" value={role} onChange={(event) => setRole(event.target.value === "staff" ? "staff" : "administrator")}><option value="administrator">Administrator</option><option value="staff">Staff</option></select><small>Preview only — not a security boundary.</small></label>
-          <button className="profile-menu" onClick={() => void handleSignOut()} title="Sign out and return to login">
-            <span className="admin-avatar">{accountInitials}</span>
-            <span className="profile-copy"><strong>{user?.email ?? "Signed-in account"}</strong><small>Signed in · demo data</small></span>
+          <button className="profile-menu" onClick={() => void handleSignOut()} title="Sign out">
+            <span className="admin-avatar">{initials}</span>
+            <span className="profile-copy"><strong>{user?.email ?? "Signed-in account"}</strong><small>Authenticated account</small></span>
             <LogOut size={15} />
           </button>
           {signOutError && <p role="alert" className="sign-out-error">{signOutError}</p>}
@@ -120,19 +115,11 @@ export default function AppLayout() {
       <main className="main-panel">
         <header className="topbar">
           <button className="icon-button mobile-menu" aria-label="Open navigation" onClick={() => setMenuOpen(true)}><Menu size={21} /></button>
-          <div className="breadcrumbs"><span>Northstar HQ</span><span className="crumb-slash">/</span><strong>{pageName}</strong></div>
+          <div className="breadcrumbs"><span>Verity</span><span className="crumb-slash">/</span><strong>{pageName}</strong></div>
           <div className="topbar-actions">
-            <form className="search-field" onSubmit={submitSearch}><Search size={16} /><input aria-label="Search people" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search people..." /><kbd>↵</kbd></form>
-            <div className="topbar-popover-wrap">
-              <button className="icon-button notification-button" aria-label="Notifications" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen(!notificationsOpen)}><Bell size={18} /><i /></button>
-              {notificationsOpen && <div className="topbar-popover"><strong>Notifications</strong><p><span className="popover-dot amber" />1 unmatched demo recognition needs review.</p><p><span className="popover-dot teal" />Demo activity refreshed at 9:45 AM.</p><button onClick={() => setNotificationsOpen(false)}>Dismiss</button></div>}
-            </div>
+            <form className="search-field" onSubmit={submitSearch}><Search size={16} /><input aria-label="Search students" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search students..." /><kbd>↵</kbd></form>
             <span className="topbar-divider" />
-            <span className="topbar-date">{new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" }).format(new Date())}</span>
-            <div className="topbar-popover-wrap profile-trigger-wrap">
-              <button className="topbar-profile" aria-label="Account menu" aria-expanded={profileOpen} onClick={() => setProfileOpen(!profileOpen)}><span className="admin-avatar">{accountInitials}</span><ChevronDown size={13} /></button>
-              {profileOpen && <div className="topbar-popover profile-popover"><strong>{user?.email ?? "Signed-in account"}</strong><small>Authenticated account</small><label className="demo-role-control">Prototype role<select aria-label="Switch prototype role" value={role} onChange={(event) => setRole(event.target.value === "staff" ? "staff" : "administrator")}><option value="administrator">Administrator</option><option value="staff">Staff</option></select><small>Preview only — not a security boundary.</small></label>{role === "administrator" && <Link to="/settings" onClick={() => setProfileOpen(false)}><Settings size={14} /> Account settings</Link>}{signOutError && <p role="alert" className="sign-out-error">{signOutError}</p>}<button type="button" onClick={() => void handleSignOut()}><LogOut size={14} /> Sign out</button></div>}
-            </div>
+            <span className="topbar-date">{new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" }).format(new Date())}</span>
           </div>
         </header>
         <div className="content-wrap"><Outlet /></div>

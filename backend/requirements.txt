@@ -4,9 +4,11 @@ python-multipart>=0.0.9,<1
 Pillow>=10,<12
 numpy>=1.26,<3
 tensorflow>=2.13
+opencv-contrib-python-headless>=4.10,<5
 sqlalchemy[asyncio]>=2.0
 alembic
 asyncpg
 pydantic-settings
 argon2-cffi
 PyJWT[crypto]>=2.8
+cryptography>=42,<48

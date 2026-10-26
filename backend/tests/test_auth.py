@@ -13,7 +13,7 @@ import pytest
 import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from fastapi import APIRouter, FastAPI, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, Request, Response
 from fastapi.testclient import TestClient
 
 from app.auth.audit import LOGIN_FAILURE_ACTION, count_recent_login_failures
@@ -533,30 +533,28 @@ class SessionTests(unittest.TestCase):
 @pytest.mark.parametrize(
     ("router_name", "allowed_roles"),
     [
-        ("people reads", {"admin", "staff"}),
-        ("people writes", {"admin"}),
-        ("rooms reads", {"admin", "staff"}),
-        ("rooms writes", {"admin"}),
-        ("attendance reads", {"admin", "staff"}),
-        ("reports reads", {"admin", "staff"}),
-        ("role management", {"admin"}),
-        ("audit-log viewing", {"admin"}),
-        ("user management", {"admin"}),
+        ("academic reads", {"admin", "staff", "lecturer"}),
+        ("academic writes", {"admin"}),
+        ("attendance writes", {"admin", "staff", "lecturer"}),
     ],
 )
-@pytest.mark.parametrize("role", [None, "admin", "staff", "visitor"])
+@pytest.mark.parametrize("role", [None, "admin", "staff", "lecturer", "visitor"])
 def test_authorization_matrix_at_router_boundary(
     router_name: str,
     allowed_roles: set[str],
     role: str | None,
 ) -> None:
     from app.db.session import get_session
-    from app.main import AUTHORIZATION_ROUTERS
+    from app.api.v1.academic import attendance_access, read_access, write_access
 
-    protected_router = AUTHORIZATION_ROUTERS[router_name]
+    access_dependency = {
+        "academic reads": read_access,
+        "academic writes": write_access,
+        "attendance writes": attendance_access,
+    }[router_name]
     test_router = APIRouter(
-        prefix=protected_router.prefix,
-        dependencies=protected_router.dependencies,
+        prefix="/academic",
+        dependencies=[Depends(access_dependency)],
     )
     test_router.add_api_route(
         "/authorization-probe",
@@ -577,9 +575,7 @@ def test_authorization_matrix_at_router_boundary(
         new_callable=AsyncMock,
         return_value=user,
     ):
-        response = TestClient(test_app).get(
-            f"{protected_router.prefix}/authorization-probe"
-        )
+        response = TestClient(test_app).get("/academic/authorization-probe")
 
     expected_status = (
         401

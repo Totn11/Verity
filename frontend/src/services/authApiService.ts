@@ -3,7 +3,7 @@ import { apiRequest } from "../lib/api";
 export type AuthenticatedUser = {
   email: string;
   userId: string;
-  role: "admin" | "staff";
+  role: "admin" | "staff" | "lecturer";
   expiresAt: number;
 };
 
@@ -13,7 +13,7 @@ async function requestSession(path: string, init?: RequestInit): Promise<Authent
     || !("authenticated" in payload) || payload.authenticated !== true
     || !("email" in payload) || typeof payload.email !== "string"
     || !("user_id" in payload) || typeof payload.user_id !== "string"
-    || !("role" in payload) || (payload.role !== "admin" && payload.role !== "staff")
+    || !("role" in payload) || (payload.role !== "admin" && payload.role !== "staff" && payload.role !== "lecturer")
     || !("expires_at" in payload) || typeof payload.expires_at !== "number") {
     throw new Error("The authentication service returned an invalid response.");
   }

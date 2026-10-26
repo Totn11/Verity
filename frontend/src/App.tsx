@@ -1,19 +1,19 @@
 import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 import AppLayout from "./components/AppLayout";
 import { useAuth } from "./data/AuthContext";
-import { usePeople } from "./data/PeopleContext";
 import {
-  AttendancePage,
+  AttendanceRecordsPage,
+  AttendanceSessionsPage,
   AuditLogsPage,
-  CheckInPage,
-  DirectoryPage,
-  FacilityPage,
+  CoursesPage,
+  FacialEnrolmentPage,
   LoginPage,
-  PersonProfilePage,
+  RecognitionPage,
   ReportsPage,
   SettingsPage,
+  StudentsPage,
   UsersPage,
-} from "./pages/Pages";
+} from "./pages/ClassroomPages";
 import DashboardPage from "./pages/DashboardPage";
 
 function RequireAuth() {
@@ -23,8 +23,8 @@ function RequireAuth() {
 }
 
 function AdministratorOnly({ children }: { children: JSX.Element }) {
-  const { role } = usePeople();
-  return role === "administrator" ? children : <Navigate to="/" replace />;
+  const { user } = useAuth();
+  return user?.role === "admin" ? children : <Navigate to="/" replace />;
 }
 
 export default function App() {
@@ -34,13 +34,14 @@ export default function App() {
       <Route element={<RequireAuth />}>
         <Route element={<AppLayout />}>
           <Route index element={<DashboardPage />} />
-          <Route path="attendance" element={<AttendancePage />} />
-          <Route path="audit" element={<AdministratorOnly><AuditLogsPage /></AdministratorOnly>} />
-          <Route path="people" element={<DirectoryPage />} />
-          <Route path="people/:personId" element={<PersonProfilePage />} />
-          <Route path="facility" element={<FacilityPage />} />
-          <Route path="check-in" element={<CheckInPage />} />
+          <Route path="students" element={<StudentsPage />} />
+          <Route path="facial-enrolment" element={<AdministratorOnly><FacialEnrolmentPage /></AdministratorOnly>} />
+          <Route path="courses" element={<CoursesPage />} />
+          <Route path="attendance" element={<AttendanceSessionsPage />} />
+          <Route path="recognition" element={<RecognitionPage />} />
+          <Route path="records" element={<AttendanceRecordsPage />} />
           <Route path="reports" element={<ReportsPage />} />
+          <Route path="audit" element={<AdministratorOnly><AuditLogsPage /></AdministratorOnly>} />
           <Route path="users" element={<AdministratorOnly><UsersPage /></AdministratorOnly>} />
           <Route path="settings" element={<AdministratorOnly><SettingsPage /></AdministratorOnly>} />
         </Route>

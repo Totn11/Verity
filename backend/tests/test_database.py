@@ -11,7 +11,20 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.base import Base, NAMING_CONVENTION
 from app.db.config import get_settings
-from app.db.models import AttendanceEvent, LocationEvent, Person, Room, Session, User
+from app.db.models import (
+    AttendanceEvent,
+    AttendanceSession,
+    Course,
+    CourseEnrollment,
+    FaceTemplate,
+    LocationEvent,
+    Person,
+    Room,
+    Session,
+    SessionAttendanceRecord,
+    Student,
+    User,
+)
 from app.db.session import get_engine
 from app.main import app, health
 
@@ -31,7 +44,7 @@ class DatabaseLayerTests(unittest.TestCase):
         with patch.dict(os.environ, {"DATABASE_URL": "postgresql+asyncpg://example"}, clear=True):
             self.assertEqual(get_settings().database_url, "postgresql+asyncpg://example")
 
-    def test_base_uses_constraint_naming_convention_for_facility_models(self) -> None:
+    def test_base_contains_classroom_models_and_preserves_legacy_tables(self) -> None:
         self.assertEqual(
             set(Base.metadata.tables),
             {
@@ -43,6 +56,16 @@ class DatabaseLayerTests(unittest.TestCase):
                 "recognition_events",
                 "location_events",
                 "audit_events",
+                "students",
+                "semesters",
+                "courses",
+                "class_sections",
+                "course_enrollments",
+                "attendance_sessions",
+                "session_attendance_records",
+                "face_templates",
+                "face_recognition_attempts",
+                "attendance_sync_outbox",
             },
         )
         self.assertEqual(Base.metadata.naming_convention, NAMING_CONVENTION)
@@ -52,6 +75,25 @@ class DatabaseLayerTests(unittest.TestCase):
         self.assertIsNotNone(Session.user.property.back_populates)
         self.assertIsNotNone(Person.attendance_events.property.back_populates)
         self.assertIsNotNone(Room.location_events.property.back_populates)
+        self.assertIsNotNone(Student.enrollments.property.back_populates)
+        self.assertIsNotNone(Course.class_sections.property.back_populates)
+        self.assertIsNotNone(CourseEnrollment.student.property.back_populates)
+        self.assertIsNotNone(AttendanceSession.records.property.back_populates)
+        self.assertIsNotNone(SessionAttendanceRecord.student.property.back_populates)
+        self.assertIsNotNone(FaceTemplate.student.property.back_populates)
+        self.assertEqual(
+            {
+                index.name
+                for index in SessionAttendanceRecord.__table__.indexes
+                if index.unique
+            },
+            {"uq_session_attendance_session_student", "uq_session_attendance_source_event"},
+        )
+        self.assertEqual(
+            {column.name for column in FaceTemplate.__table__.columns}
+            & {"encrypted_template", "encryption_key_id", "model_sha256", "consent_record_id"},
+            {"encrypted_template", "encryption_key_id", "model_sha256", "consent_record_id"},
+        )
         self.assertEqual(
             {index.name for index in AttendanceEvent.__table__.indexes},
             {
